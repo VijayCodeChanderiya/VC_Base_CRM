@@ -1,68 +1,81 @@
 @import "tailwindcss";
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
 
 @theme {
-  --color-background: #eff6ff;
-  --color-foreground: #0f172a;
+  --color-background: #f5f6f9;
+  --color-foreground: #12141b;
   --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
-  --color-border: #bfdbfe;
-  --color-muted: #dbeafe;
-  --color-muted-foreground: #475569;
-  --color-primary: #2563eb;
+  --color-card-foreground: #12141b;
+  --color-border: #e7e9ee;
+  --color-muted: #eef0f4;
+  --color-muted-foreground: #6b7280;
+  --color-primary: #4f51e5;
   --color-primary-foreground: #ffffff;
   --color-destructive: #dc2626;
   --color-destructive-foreground: #ffffff;
-  --radius: 0.5rem;
+  --color-success: #0f9d63;
+  --color-success-foreground: #ffffff;
+  --color-warning: #d97706;
+  --color-warning-foreground: #ffffff;
+  --radius: 0.625rem;
+  --font-sans: "Manrope", sans-serif;
 }
 
 /* Used only before the user has made an explicit choice in Settings (no data-theme set yet) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --color-background: #0b0f19;
-    --color-foreground: #e5e7eb;
-    --color-card: #111827;
-    --color-card-foreground: #e5e7eb;
-    --color-border: #1f2937;
-    --color-muted: #1f2937;
-    --color-muted-foreground: #9ca3af;
+    --color-background: #0a0c12;
+    --color-foreground: #edeef2;
+    --color-card: #13161f;
+    --color-card-foreground: #edeef2;
+    --color-border: rgba(255, 255, 255, 0.07);
+    --color-muted: #171b26;
+    --color-muted-foreground: #9aa1b2;
     --color-primary: #6366f1;
     --color-primary-foreground: #ffffff;
+    --color-success: #3ecf8e;
+    --color-warning: #f5a623;
   }
 }
 
 :root[data-theme="light"] {
-  --color-background: #eff6ff;
-  --color-foreground: #0f172a;
+  --color-background: #f5f6f9;
+  --color-foreground: #12141b;
   --color-card: #ffffff;
-  --color-card-foreground: #0f172a;
-  --color-border: #bfdbfe;
-  --color-muted: #dbeafe;
-  --color-muted-foreground: #475569;
-  --color-primary: #2563eb;
+  --color-card-foreground: #12141b;
+  --color-border: #e7e9ee;
+  --color-muted: #eef0f4;
+  --color-muted-foreground: #6b7280;
+  --color-primary: #4f51e5;
   --color-primary-foreground: #ffffff;
   --color-destructive: #dc2626;
   --color-destructive-foreground: #ffffff;
+  --color-success: #0f9d63;
+  --color-warning: #d97706;
 }
 
 :root[data-theme="dark"] {
-  --color-background: #0b0f19;
-  --color-foreground: #e5e7eb;
-  --color-card: #111827;
-  --color-card-foreground: #e5e7eb;
-  --color-border: #1f2937;
-  --color-muted: #1f2937;
-  --color-muted-foreground: #9ca3af;
+  --color-background: #0a0c12;
+  --color-foreground: #edeef2;
+  --color-card: #13161f;
+  --color-card-foreground: #edeef2;
+  --color-border: rgba(255, 255, 255, 0.07);
+  --color-muted: #171b26;
+  --color-muted-foreground: #9aa1b2;
   --color-primary: #6366f1;
   --color-primary-foreground: #ffffff;
   --color-destructive: #dc2626;
   --color-destructive-foreground: #ffffff;
+  --color-success: #3ecf8e;
+  --color-warning: #f5a623;
 }
 
 body {
   margin: 0;
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: "Manrope", system-ui, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: -0.01em;
   cursor: default;
   user-select: none;
 }
@@ -88,4 +101,16 @@ a {
 
 #root {
   min-height: 100svh;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.35);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }

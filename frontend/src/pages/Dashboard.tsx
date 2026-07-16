@@ -1,5 +1,18 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  IndianRupee,
+  ShoppingCart,
+  Users,
+  Package,
+  AlertTriangle,
+  ScanLine,
+  Undo2,
+  ShieldCheck,
+  RotateCcw,
+  Smartphone,
+  Car,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatTile } from "@/components/dashboard/StatTile";
@@ -57,6 +70,7 @@ export function Dashboard() {
                 label="Revenue this month"
                 value={data.revenueThisMonth}
                 prefix="₹"
+                icon={IndianRupee}
                 onClick={() => setActiveDetail("revenue")}
               />
             )}
@@ -64,6 +78,7 @@ export function Dashboard() {
               <StatTile
                 label="Sales this month"
                 value={data.salesThisMonth}
+                icon={ShoppingCart}
                 onClick={() => setActiveDetail("salesCount")}
               />
             )}
@@ -71,6 +86,7 @@ export function Dashboard() {
               <StatTile
                 label="Total customers"
                 value={data.totalCustomers}
+                icon={Users}
                 onClick={() => setActiveDetail("customers")}
               />
             )}
@@ -78,6 +94,7 @@ export function Dashboard() {
               <StatTile
                 label="Active products"
                 value={data.totalProducts}
+                icon={Package}
                 onClick={() => setActiveDetail("products")}
               />
             )}
@@ -86,6 +103,7 @@ export function Dashboard() {
                 label="Low stock alerts"
                 value={data.lowStockCount}
                 tone={data.lowStockCount > 0 ? "warning" : "default"}
+                icon={AlertTriangle}
                 onClick={() => setActiveDetail("lowStock")}
               />
             )}
@@ -94,6 +112,7 @@ export function Dashboard() {
                 label="IMEI in stock / sold"
                 value={data.imeiInStock}
                 sublabel={`${data.imeiSold.toLocaleString()} sold`}
+                icon={ScanLine}
                 onClick={() => setActiveDetail("imeiStock")}
               />
             )}
@@ -102,6 +121,7 @@ export function Dashboard() {
                 label="Pending returns"
                 value={data.pendingReturns}
                 tone={data.pendingReturns > 0 ? "warning" : "default"}
+                icon={Undo2}
                 onClick={() => setActiveDetail("pendingReturns")}
               />
             )}
@@ -109,6 +129,7 @@ export function Dashboard() {
               <StatTile
                 label="Active warranty claims"
                 value={data.activeWarrantyClaims}
+                icon={ShieldCheck}
                 onClick={() => setActiveDetail("warrantyClaims")}
               />
             )}
@@ -117,6 +138,7 @@ export function Dashboard() {
                 label="Open RMA cases"
                 value={data.pendingRma}
                 tone={data.pendingRma > 0 ? "warning" : "default"}
+                icon={RotateCcw}
                 onClick={() => setActiveDetail("pendingRma")}
               />
             )}
@@ -124,6 +146,7 @@ export function Dashboard() {
               <StatTile
                 label="Active SIMs"
                 value={data.activeSims}
+                icon={Smartphone}
                 onClick={() => setActiveDetail("activeSims")}
               />
             )}
@@ -131,6 +154,7 @@ export function Dashboard() {
               <StatTile
                 label="Vehicles tracked"
                 value={data.totalVehicles}
+                icon={Car}
                 onClick={() => setActiveDetail("vehicles")}
               />
             )}

@@ -22,11 +22,14 @@ const SOURCE_OPTIONS = [
   { value: "OTHER", label: "Other" },
 ] as const;
 
+type Carrier = "JIO" | "AIRTEL" | "VI" | "BSNL" | "OTHER";
+type BillingCycle = "MONTHLY" | "QUARTERLY" | "HALF_YEARLY" | "YEARLY";
+
 interface CustomerSim {
   id: string;
   iccid: string;
-  carrier: "JIO" | "AIRTEL" | "VI" | "BSNL" | "OTHER";
-  billingCycle: "MONTHLY" | "QUARTERLY" | "YEARLY" | null;
+  carrier: Carrier;
+  billingCycle: BillingCycle | null;
   status: string;
   expiryDate: string | null;
 }
@@ -45,7 +48,7 @@ interface Customer {
   sims: CustomerSim[];
 }
 
-const CARRIER_LABELS: Record<CustomerSim["carrier"], string> = {
+const CARRIER_LABELS: Record<Carrier, string> = {
   JIO: "Jio",
   AIRTEL: "Airtel",
   VI: "VI",
@@ -53,38 +56,57 @@ const CARRIER_LABELS: Record<CustomerSim["carrier"], string> = {
   OTHER: "Other",
 };
 
-const BILLING_CYCLE_LABELS: Record<NonNullable<CustomerSim["billingCycle"]>, string> = {
+const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
   MONTHLY: "Monthly",
   QUARTERLY: "Quarterly",
+  HALF_YEARLY: "Half-Yearly",
   YEARLY: "Yearly",
 };
 
-function SimBadge({ sim }: { sim: CustomerSim }) {
-  const isActive = sim.status === "ACTIVE" || sim.status === "ASSIGNED";
+interface CarrierGroup {
+  carrier: CustomerSim["carrier"];
+  sims: CustomerSim[];
+}
+
+function groupSimsByCarrier(sims: CustomerSim[]): CarrierGroup[] {
+  const map = new Map<string, CarrierGroup>();
+  for (const s of sims) {
+    const existing = map.get(s.carrier);
+    if (existing) existing.sims.push(s);
+    else map.set(s.carrier, { carrier: s.carrier, sims: [s] });
+  }
+  return Array.from(map.values());
+}
+
+function SimBadge({ group }: { group: CarrierGroup }) {
+  const isActive = group.sims.some((s) => s.status === "ACTIVE" || s.status === "ASSIGNED");
+  const cycles = Array.from(new Set(group.sims.map((s) => s.billingCycle).filter(Boolean))) as NonNullable<
+    CustomerSim["billingCycle"]
+  >[];
+  const cycleLabel = cycles.map((c) => BILLING_CYCLE_LABELS[c]).join(", ");
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${
         isActive ? "border-primary/30 bg-primary/10 text-primary" : "border-border bg-muted text-muted-foreground"
       }`}
-      title={`ICCID ${sim.iccid}`}
+      title={group.sims.map((s) => s.iccid).join(", ")}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-primary" : "bg-muted-foreground"}`} />
-      {CARRIER_LABELS[sim.carrier]}
-      {sim.billingCycle && ` · ${BILLING_CYCLE_LABELS[sim.billingCycle]}`}
+      {CARRIER_LABELS[group.carrier]}
+      {group.sims.length > 1 && ` ×${group.sims.length}`}
+      {cycleLabel && ` · ${cycleLabel}`}
     </span>
   );
 }
 
 function SimBadgeList({ sims }: { sims: CustomerSim[] }) {
   if (sims.length === 0) return <span className="text-muted-foreground">-</span>;
-  const shown = sims.slice(0, 2);
-  const rest = sims.length - shown.length;
+  const groups = groupSimsByCarrier(sims);
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {shown.map((s) => (
-        <SimBadge key={s.id} sim={s} />
+      {groups.map((g) => (
+        <SimBadge key={g.carrier} group={g} />
       ))}
-      {rest > 0 && <span className="text-xs text-muted-foreground">+{rest} more</span>}
     </div>
   );
 }
@@ -494,30 +516,6 @@ export function Customers() {
               ))}
             </select>
           </div>
-          {isEditing && editTarget && (
-            <div className="col-span-2 rounded-md border border-border p-3">
-              <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">SIM Card</p>
-              {editTarget.sims.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No SIM card purchased from us yet. Assign one from SIM Management.
-                </p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {editTarget.sims.map((s) => (
-                    <div key={s.id} className="flex items-center justify-between text-sm">
-                      <span>
-                        {CARRIER_LABELS[s.carrier]} SIM
-                        <span className="ml-1 font-mono text-xs text-muted-foreground">({s.iccid})</span>
-                      </span>
-                      <span className="text-muted-foreground">
-                        {s.billingCycle ? BILLING_CYCLE_LABELS[s.billingCycle] : "Billing not set"} · {s.status}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
           {formError && <p className="text-sm text-destructive col-span-2">{formError}</p>}
           <Button type="submit" disabled={activeMutation.isPending} className="col-span-2">
             {activeMutation.isPending ? "Saving..." : isEditing ? "Save changes" : "Add customer"}

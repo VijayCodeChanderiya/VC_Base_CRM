@@ -14,7 +14,7 @@ export function CustomizePanel() {
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-2 w-72 rounded-md border border-border bg-card shadow-lg z-40 p-3">
+          <div className="absolute right-0 mt-2 w-72 rounded-xl border border-border bg-card shadow-2xl z-40 p-3">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-semibold">Dashboard cards</p>
               <button className="text-xs text-primary hover:underline" onClick={resetAll}>

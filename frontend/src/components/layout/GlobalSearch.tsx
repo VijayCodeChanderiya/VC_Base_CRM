@@ -44,7 +44,7 @@ export function GlobalSearch() {
         onBlur={() => setTimeout(() => setOpen(false), 150)}
       />
       {open && q.trim().length >= 2 && (
-        <div className="absolute left-0 mt-2 w-96 rounded-md border border-border bg-card shadow-lg z-40 max-h-96 overflow-y-auto text-sm">
+        <div className="absolute left-0 mt-2 w-96 rounded-xl border border-border bg-card shadow-2xl z-40 max-h-96 overflow-y-auto text-sm">
           {!hasResults && <p className="p-3 text-muted-foreground">No results</p>}
 
           {data && data.customers.length > 0 && (

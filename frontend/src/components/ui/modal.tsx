@@ -26,14 +26,17 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
         className={cn(
-          "w-full rounded-lg border border-border bg-card p-4 shadow-lg max-h-[85vh] overflow-y-auto",
+          "w-full rounded-2xl border border-border bg-card p-5 shadow-2xl max-h-[85vh] overflow-y-auto",
           sizeClasses[size]
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-3 sticky top-0 bg-card">
-          <h3 className="text-sm font-semibold">{title}</h3>
-          <button className="text-muted-foreground hover:text-foreground text-sm" onClick={onClose}>
+        <div className="flex items-center justify-between mb-4 sticky top-0 bg-card">
+          <h3 className="text-base font-bold tracking-tight">{title}</h3>
+          <button
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground text-xs"
+            onClick={onClose}
+          >
             ✕
           </button>
         </div>
