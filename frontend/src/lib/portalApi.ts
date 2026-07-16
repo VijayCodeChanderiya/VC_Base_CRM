@@ -1,8 +1,10 @@
 import axios from "axios";
 import { useCustomerAuthStore } from "@/store/customerAuth";
 
+const API_ROOT = import.meta.env.VITE_API_URL ?? "";
+
 export const portalApi = axios.create({
-  baseURL: "/api/portal",
+  baseURL: `${API_ROOT}/api/portal`,
 });
 
 portalApi.interceptors.request.use((config) => {
