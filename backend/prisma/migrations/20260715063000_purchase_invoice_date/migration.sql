@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Purchase" ADD COLUMN "invoiceNumber" TEXT;
+ALTER TABLE "Purchase" ADD COLUMN "purchaseDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;

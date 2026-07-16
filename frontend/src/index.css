@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #eff6ff;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-border: #bfdbfe;
+  --color-muted: #dbeafe;
+  --color-muted-foreground: #475569;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+  --radius: 0.5rem;
+}
+
+/* Used only before the user has made an explicit choice in Settings (no data-theme set yet) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --color-background: #0b0f19;
+    --color-foreground: #e5e7eb;
+    --color-card: #111827;
+    --color-card-foreground: #e5e7eb;
+    --color-border: #1f2937;
+    --color-muted: #1f2937;
+    --color-muted-foreground: #9ca3af;
+    --color-primary: #6366f1;
+    --color-primary-foreground: #ffffff;
+  }
+}
+
+:root[data-theme="light"] {
+  --color-background: #eff6ff;
+  --color-foreground: #0f172a;
+  --color-card: #ffffff;
+  --color-card-foreground: #0f172a;
+  --color-border: #bfdbfe;
+  --color-muted: #dbeafe;
+  --color-muted-foreground: #475569;
+  --color-primary: #2563eb;
+  --color-primary-foreground: #ffffff;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+}
+
+:root[data-theme="dark"] {
+  --color-background: #0b0f19;
+  --color-foreground: #e5e7eb;
+  --color-card: #111827;
+  --color-card-foreground: #e5e7eb;
+  --color-border: #1f2937;
+  --color-muted: #1f2937;
+  --color-muted-foreground: #9ca3af;
+  --color-primary: #6366f1;
+  --color-primary-foreground: #ffffff;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  cursor: default;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  cursor: text;
+  user-select: text;
+}
+
+table td,
+table th {
+  user-select: text;
+}
+
+button,
+[role="button"],
+select,
+a {
+  cursor: pointer;
+}
+
+#root {
+  min-height: 100svh;
+}

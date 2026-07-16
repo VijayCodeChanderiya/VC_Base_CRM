@@ -1,0 +1,15 @@
+-- AlterTable
+ALTER TABLE "Supplier" ADD COLUMN     "addressLine2" TEXT,
+ADD COLUMN     "alternatePhone" TEXT,
+ADD COLUMN     "bankAccountHolder" TEXT,
+ADD COLUMN     "bankAccountNumber" TEXT,
+ADD COLUMN     "bankIfsc" TEXT,
+ADD COLUMN     "categorySupplied" TEXT,
+ADD COLUMN     "city" TEXT,
+ADD COLUMN     "contactPerson" TEXT,
+ADD COLUMN     "country" TEXT,
+ADD COLUMN     "creditLimit" DECIMAL(12,2),
+ADD COLUMN     "panNumber" TEXT,
+ADD COLUMN     "pincode" TEXT,
+ADD COLUMN     "state" TEXT,
+ADD COLUMN     "website" TEXT;
