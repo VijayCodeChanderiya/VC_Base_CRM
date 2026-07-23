@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { portalApi } from "@/lib/portalApi";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/date";
 
 interface WarrantyClaim {
@@ -13,17 +15,15 @@ interface WarrantyClaim {
   imeiRecord: { imei: string; product: { name: string } } | null;
 }
 
-interface SaleItem {
+interface AmcContract {
   id: string;
-  product: { name: string; sku: string };
-  imei: { imei: string } | null;
-}
-
-interface Sale {
-  id: string;
-  invoiceNumber: string;
-  createdAt: string;
-  items: SaleItem[];
+  contractNumber: string;
+  startDate: string;
+  endDate: string;
+  status: "ACTIVE" | "EXPIRING_SOON" | "EXPIRED" | "CANCELLED";
+  billingAmount: string;
+  billingCycle: string;
+  vehicle: { registrationNumber: string } | null;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -33,95 +33,78 @@ const STATUS_LABEL: Record<string, string> = {
   VOID: "Void",
 };
 
-const WARRANTY_YEARS = 1;
-
-function warrantyExpiry(purchaseDate: string) {
-  const expiry = new Date(purchaseDate);
-  expiry.setFullYear(expiry.getFullYear() + WARRANTY_YEARS);
-  return expiry;
-}
+const AMC_STATUS_TONE: Record<AmcContract["status"], string> = {
+  ACTIVE: "bg-primary/10 text-primary",
+  EXPIRING_SOON: "bg-warning/15 text-warning",
+  EXPIRED: "bg-destructive/10 text-destructive",
+  CANCELLED: "bg-muted text-muted-foreground",
+};
 
 export function PortalWarranty() {
+  const navigate = useNavigate();
   const { data: claimsData, isLoading: claimsLoading } = useQuery({
     queryKey: ["portal-warranty"],
     queryFn: async () => (await portalApi.get("/warranty")).data as { items: WarrantyClaim[] },
   });
 
-  const { data: salesData, isLoading: salesLoading } = useQuery({
-    queryKey: ["portal-sales"],
-    queryFn: async () => (await portalApi.get("/sales")).data as { items: Sale[] },
+  const { data: amcData, isLoading: amcLoading } = useQuery({
+    queryKey: ["portal-amc"],
+    queryFn: async () => (await portalApi.get("/amc")).data as { items: AmcContract[] },
   });
-
-  const devices = (salesData?.items ?? []).flatMap((sale) =>
-    sale.items
-      .filter((item) => item.imei)
-      .map((item) => {
-        const expiry = warrantyExpiry(sale.createdAt);
-        const active = expiry.getTime() >= Date.now();
-        return {
-          key: item.id,
-          product: item.product.name,
-          imei: item.imei!.imei,
-          invoiceNumber: sale.invoiceNumber,
-          purchaseDate: sale.createdAt,
-          expiry,
-          active,
-        };
-      })
-  );
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Warranty</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold">Warranty & AMC</h1>
+        <Button size="sm" variant="outline" onClick={() => navigate("/portal/devices")}>
+          View my devices
+        </Button>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>My Devices — Warranty Status</CardTitle>
-          <p className="text-xs text-muted-foreground">
-            Standard warranty is {WARRANTY_YEARS} year from the date of purchase.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
-          {salesLoading && <p className="p-4 text-sm text-muted-foreground">Loading...</p>}
-          {!salesLoading && devices.length === 0 && (
-            <p className="p-4 text-sm text-muted-foreground">No IMEI-tracked devices on record.</p>
-          )}
-          {devices.length > 0 && (
-            <table className="w-full text-sm">
-              <thead className="border-b border-border text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2">Device</th>
-                  <th className="px-4 py-2">IMEI</th>
-                  <th className="px-4 py-2">Invoice</th>
-                  <th className="px-4 py-2">Purchased On</th>
-                  <th className="px-4 py-2">Warranty Valid Until</th>
-                  <th className="px-4 py-2">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {devices.map((d) => (
-                  <tr key={d.key} className="border-b border-border last:border-0">
-                    <td className="px-4 py-2">{d.product}</td>
-                    <td className="px-4 py-2 font-mono text-xs">{d.imei}</td>
-                    <td className="px-4 py-2">{d.invoiceNumber}</td>
-                    <td className="px-4 py-2">{formatDate(d.purchaseDate)}</td>
-                    <td className="px-4 py-2">{formatDate(d.expiry)}</td>
-                    <td className="px-4 py-2">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                          d.active ? "bg-green-100 text-green-700" : "bg-destructive/10 text-destructive"
-                        }`}
-                      >
-                        {d.active ? "Active" : "Expired"}
-                      </span>
-                    </td>
+      <div>
+        <h2 className="mb-3 text-lg font-semibold">AMC Contracts</h2>
+
+        {amcLoading && <p className="text-sm text-muted-foreground">Loading...</p>}
+
+        {!amcLoading && (amcData?.items.length ?? 0) === 0 && (
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">No AMC contracts on record.</CardContent>
+          </Card>
+        )}
+
+        {amcData && amcData.items.length > 0 && (
+          <Card>
+            <CardContent className="p-0">
+              <table className="w-full text-sm">
+                <thead className="border-b border-border text-left text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2">Contract #</th>
+                    <th className="px-4 py-2">Vehicle</th>
+                    <th className="px-4 py-2">Billing</th>
+                    <th className="px-4 py-2">Valid Until</th>
+                    <th className="px-4 py-2">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </CardContent>
-      </Card>
+                </thead>
+                <tbody>
+                  {amcData.items.map((c) => (
+                    <tr key={c.id} className="border-b border-border last:border-0">
+                      <td className="px-4 py-2 font-mono text-xs">{c.contractNumber}</td>
+                      <td className="px-4 py-2">{c.vehicle?.registrationNumber ?? "-"}</td>
+                      <td className="px-4 py-2">₹{Number(c.billingAmount).toLocaleString()} / {c.billingCycle}</td>
+                      <td className="px-4 py-2">{formatDate(c.endDate)}</td>
+                      <td className="px-4 py-2">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${AMC_STATUS_TONE[c.status]}`}>
+                          {c.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        )}
+      </div>
 
       <div>
         <h2 className="mb-3 text-lg font-semibold">Warranty Claims</h2>

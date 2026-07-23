@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,6 +27,7 @@ interface Vehicle {
   year: number | null;
   ownerCustomer: Customer;
   installations: { id: string; status: string; imeiRecord: { imei: string; product: { name: string } } }[];
+  branch?: { organization?: { name: string; displayName: string | null } };
 }
 
 const emptyForm = { registrationNumber: "", make: "", model: "", year: "", ownerCustomerId: "" };
@@ -35,6 +37,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 export function Vehicles() {
   const queryClient = useQueryClient();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Vehicle | null>(null);
@@ -149,6 +152,7 @@ export function Vehicles() {
                   <th className="p-3">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
+                  {isSuperAdmin && <th className="p-3">Organization</th>}
                   <SortableTh
                     label="Reg. number"
                     columnKey="registrationNumber"
@@ -171,7 +175,7 @@ export function Vehicles() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-3" colSpan={6}>
+                    <td className="p-3" colSpan={isSuperAdmin ? 7 : 6}>
                       Loading...
                     </td>
                   </tr>
@@ -181,6 +185,11 @@ export function Vehicles() {
                     <td className="p-3">
                       <input type="checkbox" checked={selectedIds.has(v.id)} onChange={() => toggle(v.id)} />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="p-3 text-muted-foreground">
+                        {v.branch?.organization?.displayName || v.branch?.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="p-3 font-mono">{v.registrationNumber}</td>
                     <td className="p-3">
                       {v.make} {v.model} {v.year ? `(${v.year})` : ""}

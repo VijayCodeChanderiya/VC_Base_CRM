@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { QrCode } from "@/components/ui/qrcode";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { isValidImei, IMEI_ERROR } from "@/lib/validators";
 import { formatDate } from "@/lib/date";
 import { DangerZone } from "@/components/ui/DangerZone";
@@ -38,6 +39,7 @@ interface ImeiRecord {
   supplier: { name: string } | null;
   purchaseItem: { purchase: { supplier: { name: string } } } | null;
   saleItem: { sale: { customer: { name: string } } } | null;
+  branch?: { organization?: { name: string; displayName: string | null } };
 }
 
 function today() {
@@ -76,6 +78,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 export function Imei() {
   const queryClient = useQueryClient();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [addOpen, setAddOpen] = useState(false);
@@ -119,7 +122,7 @@ export function Imei() {
         page: number;
         pageSize: number;
       },
-    enabled: !!branchId,
+    enabled: isSuperAdmin || !!branchId,
   });
 
   const totalPages = imeis ? Math.max(1, Math.ceil(imeis.total / imeis.pageSize)) : 1;
@@ -201,6 +204,7 @@ export function Imei() {
                   <th className="p-3">
                     <input type="checkbox" checked={selection.allSelected} onChange={selection.toggleAll} />
                   </th>
+                  {isSuperAdmin && <th className="p-3">Organization</th>}
                   <SortableTh label="IMEI" columnKey="imei" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Product" columnKey="product" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Vendor" columnKey="vendor" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -213,7 +217,7 @@ export function Imei() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-3" colSpan={8}>
+                    <td className="p-3" colSpan={isSuperAdmin ? 9 : 8}>
                       Loading...
                     </td>
                   </tr>
@@ -227,6 +231,11 @@ export function Imei() {
                         onChange={() => selection.toggle(r.id)}
                       />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="p-3 text-muted-foreground">
+                        {r.branch?.organization?.displayName || r.branch?.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="p-3 font-mono">{r.imei}</td>
                     <td className="p-3">{r.product.name}</td>
                     <td className="p-3">{r.purchaseItem?.purchase.supplier.name ?? r.supplier?.name ?? "-"}</td>

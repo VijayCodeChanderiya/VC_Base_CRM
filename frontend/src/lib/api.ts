@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useAuthStore } from "@/store/auth";
+import { useOrgContextStore } from "@/store/orgContext";
 
 // In prod, frontend and backend live on different domains, so VITE_API_URL points
 // at the deployed backend (e.g. https://alphatech-api.onrender.com). Locally it's
@@ -14,6 +15,13 @@ api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  }
+  const { user } = useAuthStore.getState();
+  if (user?.role === "SUPER_ADMIN") {
+    const orgId = useOrgContextStore.getState().organizationId;
+    if (orgId) {
+      config.headers["X-Organization-Id"] = orgId;
+    }
   }
   return config;
 });

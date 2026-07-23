@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -35,6 +36,7 @@ interface Supplier {
   creditLimit: string | null;
   website: string | null;
   notes: string | null;
+  organization?: { name: string; displayName: string | null };
 }
 
 const emptyForm = {
@@ -62,10 +64,22 @@ const emptyForm = {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 
+interface BulkUploadResult {
+  totalRows: number;
+  created: string[];
+  failed: { row: number; reason: string }[];
+}
+
 export function Suppliers() {
   const queryClient = useQueryClient();
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkFormError, setBulkFormError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<BulkUploadResult | null>(null);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
   const [editTarget, setEditTarget] = useState<Supplier | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
@@ -198,6 +212,49 @@ export function Suppliers() {
     },
   });
 
+  function closeBulkModal() {
+    setBulkOpen(false);
+    setBulkFile(null);
+    setBulkResult(null);
+    setBulkFormError(null);
+  }
+
+  async function downloadSupplierTemplate(sample: boolean) {
+    setTemplateDownloading(true);
+    try {
+      const res = await api.get("/suppliers/bulk/template", {
+        params: sample ? { sample: 1 } : undefined,
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(res.data as Blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = sample ? "Suppliers sample file.xlsx" : "Suppliers bulk upload template.xlsx";
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
+
+  const bulkUploadMutation = useMutation({
+    mutationFn: async () => {
+      const form = new FormData();
+      form.append("file", bulkFile!);
+      return (await api.post("/suppliers/bulk/upload", form)).data as BulkUploadResult;
+    },
+    onSuccess: (result) => {
+      setBulkResult(result);
+      setBulkFile(null);
+      queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+    },
+    onError: (err: unknown) => {
+      setBulkFormError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Failed to upload suppliers"
+      );
+    },
+  });
+
   const { selectedIds, toggle, toggleAll, clear, allSelected } = useRowSelection(data?.items);
 
   const isEditing = !!editTarget;
@@ -225,7 +282,12 @@ export function Suppliers() {
     <div className="flex h-full flex-col gap-4">
       <div className="shrink-0 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Suppliers</h1>
-        <Button onClick={() => setAddOpen(true)}>+ Add supplier</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            Bulk Upload
+          </Button>
+          <Button onClick={() => setAddOpen(true)}>+ Add supplier</Button>
+        </div>
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col">
@@ -246,6 +308,7 @@ export function Suppliers() {
                   <th className="p-3">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
+                  {isSuperAdmin && <th className="p-3">Organization</th>}
                   <SortableTh label="Name" columnKey="name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Phone" columnKey="phone" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Email" columnKey="email" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -262,7 +325,7 @@ export function Suppliers() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-3" colSpan={6}>
+                    <td className="p-3" colSpan={isSuperAdmin ? 7 : 6}>
                       Loading...
                     </td>
                   </tr>
@@ -272,6 +335,11 @@ export function Suppliers() {
                     <td className="p-3">
                       <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggle(s.id)} />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="p-3 text-muted-foreground">
+                        {s.organization?.displayName || s.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="p-3">{s.name}</td>
                     <td className="p-3">{s.phone}</td>
                     <td className="p-3">{s.email ?? "-"}</td>
@@ -432,6 +500,85 @@ export function Suppliers() {
             />
           )}
         </form>
+      </Modal>
+
+      <Modal open={bulkOpen} onClose={closeBulkModal} title="Bulk Upload Suppliers" size="lg">
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            Download the template, fill in one row per supplier using the same fields as the "Add supplier" form,
+            then upload the file below. Rows with errors are reported individually so you can fix and re-upload just
+            those.
+          </p>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-muted-foreground">Excel file (.xlsx)</label>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={templateDownloading}
+                onClick={() => downloadSupplierTemplate(false)}
+              >
+                {templateDownloading ? "Downloading..." : "Download template"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={templateDownloading}
+                onClick={() => downloadSupplierTemplate(true)}
+              >
+                Download sample file
+              </Button>
+            </div>
+          </div>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setBulkFormError(null);
+              setBulkResult(null);
+              if (!bulkFile) {
+                setBulkFormError("Choose an Excel file to upload");
+                return;
+              }
+              bulkUploadMutation.mutate();
+            }}
+          >
+            <input
+              type="file"
+              accept=".xlsx"
+              className="text-sm"
+              onChange={(e) => {
+                setBulkFile(e.target.files?.[0] ?? null);
+                setBulkFormError(null);
+              }}
+            />
+            {bulkFile && <p className="text-xs text-muted-foreground">Selected: {bulkFile.name}</p>}
+            {bulkFormError && <p className="text-sm text-destructive">{bulkFormError}</p>}
+            {bulkResult && (
+              <div className="flex flex-col gap-1 rounded-md border border-border p-3 text-sm">
+                <p>Total rows processed: {bulkResult.totalRows}</p>
+                <p className="text-emerald-600">Successfully imported: {bulkResult.created.length}</p>
+                {bulkResult.failed.length > 0 && (
+                  <>
+                    <p className="text-destructive">Failed: {bulkResult.failed.length}</p>
+                    <ul className="max-h-48 list-disc overflow-y-auto pl-4 text-xs text-muted-foreground">
+                      {bulkResult.failed.map((f) => (
+                        <li key={f.row} className="text-destructive">
+                          Row {f.row}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+            <Button type="submit" disabled={bulkUploadMutation.isPending}>
+              {bulkUploadMutation.isPending ? "Uploading..." : "Upload"}
+            </Button>
+          </form>
+        </div>
       </Modal>
     </div>
   );

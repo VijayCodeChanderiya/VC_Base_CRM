@@ -1,13 +1,14 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type Role = "ADMIN" | "STAFF" | "COMPANY" | "RESELLER";
+export type Role = "ADMIN" | "STAFF" | "COMPANY" | "RESELLER" | "SUPER_ADMIN";
 
 export interface AuthUser {
   id: string;
   name: string;
   email: string;
   role: Role;
+  organizationId: string | null;
 }
 
 interface AuthState {

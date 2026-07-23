@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,6 +31,7 @@ interface RmaRecord {
   reason: string;
   imeiRecord: { imei: string; product: { name: string } };
   supplier: { name: string };
+  branch?: { organization?: { name: string; displayName: string | null } };
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
@@ -37,6 +39,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 export function Rma() {
   const queryClient = useQueryClient();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [addOpen, setAddOpen] = useState(false);
@@ -144,6 +147,7 @@ export function Rma() {
                 <th className="p-3">
                   <input type="checkbox" checked={selection.allSelected} onChange={selection.toggleAll} />
                 </th>
+                {isSuperAdmin && <th className="p-3">Organization</th>}
                 <SortableTh label="Device" columnKey="device" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Supplier" columnKey="supplier" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Reason" columnKey="reason" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -154,7 +158,7 @@ export function Rma() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td className="p-3" colSpan={6}>
+                  <td className="p-3" colSpan={isSuperAdmin ? 7 : 6}>
                     Loading...
                   </td>
                 </tr>
@@ -168,6 +172,11 @@ export function Rma() {
                       onChange={() => selection.toggle(r.id)}
                     />
                   </td>
+                  {isSuperAdmin && (
+                    <td className="p-3 text-muted-foreground">
+                      {r.branch?.organization?.displayName || r.branch?.organization?.name || "-"}
+                    </td>
+                  )}
                   <td className="p-3 font-mono">
                     {r.imeiRecord.imei} ({r.imeiRecord.product.name})
                   </td>

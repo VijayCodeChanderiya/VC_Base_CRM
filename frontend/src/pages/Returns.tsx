@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -29,7 +30,7 @@ interface ReturnRecord {
   status: string;
   reason: string | null;
   sale: { invoiceNumber: string };
-  customer: { name: string };
+  customer: { name: string; organization?: { name: string; displayName: string | null } };
   createdAt: string;
 }
 
@@ -37,6 +38,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 
 export function Returns() {
   const queryClient = useQueryClient();
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [addOpen, setAddOpen] = useState(false);
@@ -148,6 +150,7 @@ export function Returns() {
                 <th className="p-3">
                   <input type="checkbox" checked={selection.allSelected} onChange={selection.toggleAll} />
                 </th>
+                {isSuperAdmin && <th className="p-3">Organization</th>}
                 <SortableTh label="Invoice" columnKey="invoice" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Customer" columnKey="customer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Type" columnKey="type" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -159,7 +162,7 @@ export function Returns() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td className="p-3" colSpan={7}>
+                  <td className="p-3" colSpan={isSuperAdmin ? 8 : 7}>
                     Loading...
                   </td>
                 </tr>
@@ -173,6 +176,11 @@ export function Returns() {
                       onChange={() => selection.toggle(r.id)}
                     />
                   </td>
+                  {isSuperAdmin && (
+                    <td className="p-3 text-muted-foreground">
+                      {r.customer.organization?.displayName || r.customer.organization?.name || "-"}
+                    </td>
+                  )}
                   <td className="p-3">{r.sale.invoiceNumber}</td>
                   <td className="p-3">{r.customer.name}</td>
                   <td className="p-3">{r.type}</td>

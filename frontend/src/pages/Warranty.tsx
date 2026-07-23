@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +24,7 @@ interface WarrantyClaim {
   status: string;
   description: string | null;
   claimDate: string;
-  customer: { name: string };
+  customer: { name: string; organization?: { name: string; displayName: string | null } };
   imeiRecord: { imei: string; product: { name: string } } | null;
 }
 
@@ -33,6 +34,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 
 export function Warranty() {
   const queryClient = useQueryClient();
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [addOpen, setAddOpen] = useState(false);
@@ -129,6 +131,7 @@ export function Warranty() {
                 <th className="p-3">
                   <input type="checkbox" checked={selection.allSelected} onChange={selection.toggleAll} />
                 </th>
+                {isSuperAdmin && <th className="p-3">Organization</th>}
                 <SortableTh label="Customer" columnKey="customer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Product / IMEI" columnKey="product" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Description" columnKey="description" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -139,7 +142,7 @@ export function Warranty() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td className="p-3" colSpan={6}>
+                  <td className="p-3" colSpan={isSuperAdmin ? 7 : 6}>
                     Loading...
                   </td>
                 </tr>
@@ -153,6 +156,11 @@ export function Warranty() {
                       onChange={() => selection.toggle(c.id)}
                     />
                   </td>
+                  {isSuperAdmin && (
+                    <td className="p-3 text-muted-foreground">
+                      {c.customer.organization?.displayName || c.customer.organization?.name || "-"}
+                    </td>
+                  )}
                   <td className="p-3">{c.customer.name}</td>
                   <td className="p-3">
                     {c.imeiRecord ? `${c.imeiRecord.product.name} (${c.imeiRecord.imei})` : "-"}

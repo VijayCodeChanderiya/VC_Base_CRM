@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -46,6 +47,7 @@ interface Customer {
   gstNumber: string | null;
   source: string | null;
   sims: CustomerSim[];
+  organization?: { name: string; displayName: string | null };
 }
 
 const CARRIER_LABELS: Record<Carrier, string> = {
@@ -128,11 +130,16 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 
 export function Customers() {
   const queryClient = useQueryClient();
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Customer | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  const [resetTarget, setResetTarget] = useState<Customer | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
@@ -248,6 +255,23 @@ export function Customers() {
     },
   });
 
+  function closeResetModal() {
+    setResetTarget(null);
+    setResetPassword("");
+    setResetError(null);
+    setResetSuccess(false);
+  }
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async () => api.patch(`/customers/${resetTarget!.id}`, { password: resetPassword }),
+    onSuccess: () => {
+      setResetSuccess(true);
+      setResetPassword("");
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+    },
+    onError: (err: unknown) => setResetError(extractError(err)),
+  });
+
   const { selectedIds, toggle, toggleAll, clear, allSelected } = useRowSelection(data?.items);
 
   const isEditing = !!editTarget;
@@ -277,20 +301,25 @@ export function Customers() {
           className="max-w-xs mb-3 shrink-0"
         />
         <Card className="flex-1 min-h-0 flex flex-col">
-          <CardContent className="flex-1 min-h-0 overflow-y-auto p-0">
-            <table className="w-full text-sm">
+          <CardContent className="flex-1 min-h-0 overflow-auto p-0">
+            <table className="w-full min-w-[960px] text-sm">
               <thead className="sticky top-0 z-10 bg-card border-b border-border text-left">
                 <tr>
                   <th className="p-3">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
+                  {isSuperAdmin && (
+                    <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Organization
+                    </th>
+                  )}
                   <SortableTh
                     label="Name"
                     columnKey="name"
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
-                    className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   />
                   <SortableTh
                     label="Phone"
@@ -298,7 +327,7 @@ export function Customers() {
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
-                    className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   />
                   <SortableTh
                     label="City"
@@ -306,7 +335,7 @@ export function Customers() {
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
-                    className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   />
                   <SortableTh
                     label="Company"
@@ -314,7 +343,7 @@ export function Customers() {
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
-                    className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   />
                   <SortableTh
                     label="Source"
@@ -322,10 +351,13 @@ export function Customers() {
                     sortKey={sortKey}
                     sortDir={sortDir}
                     onSort={toggleSort}
-                    className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                    className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   />
-                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     SIM Card
+                  </th>
+                  <th className="whitespace-nowrap px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Portal Username
                   </th>
                   <th className="p-3"></th>
                 </tr>
@@ -333,14 +365,14 @@ export function Customers() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-4 text-muted-foreground" colSpan={8}>
+                    <td className="p-4 text-muted-foreground" colSpan={isSuperAdmin ? 10 : 9}>
                       Loading...
                     </td>
                   </tr>
                 )}
                 {!isLoading && data?.items.length === 0 && (
                   <tr>
-                    <td className="p-4 text-muted-foreground" colSpan={8}>
+                    <td className="p-4 text-muted-foreground" colSpan={isSuperAdmin ? 10 : 9}>
                       No customers found.
                     </td>
                   </tr>
@@ -350,6 +382,11 @@ export function Customers() {
                     <td className="p-3">
                       <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggle(c.id)} />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {c.organization?.displayName || c.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary">
@@ -373,10 +410,27 @@ export function Customers() {
                     <td className="px-4 py-3">
                       <SimBadgeList sims={c.sims} />
                     </td>
-                    <td className="px-4 py-3">
-                      <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
-                        Edit
-                      </Button>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {c.username ? (
+                        <span className="font-mono text-xs">{c.username}</span>
+                      ) : (
+                        <span className="text-xs">Not set up</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" className="whitespace-nowrap" onClick={() => openEdit(c)}>
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="whitespace-nowrap"
+                          onClick={() => setResetTarget(c)}
+                        >
+                          Reset Password
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -530,6 +584,57 @@ export function Customers() {
             />
           )}
         </form>
+      </Modal>
+
+      <Modal open={!!resetTarget} onClose={closeResetModal} title={`Reset portal password — ${resetTarget?.name ?? ""}`}>
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            The current password can't be viewed — it's stored one-way hashed. Set a new one below and share it with
+            the customer directly; it won't be shown again after this.
+          </p>
+          {resetTarget?.username && (
+            <p className="text-sm">
+              Username: <span className="font-mono">{resetTarget.username}</span>
+            </p>
+          )}
+          {resetSuccess ? (
+            <div className="flex flex-col gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-600">
+              <p>Password updated successfully.</p>
+              <Button size="sm" variant="outline" onClick={closeResetModal}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setResetError(null);
+                if (resetPassword.length < 8) {
+                  setResetError("Password must be at least 8 characters");
+                  return;
+                }
+                resetPasswordMutation.mutate();
+              }}
+            >
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-muted-foreground">New Password</label>
+                <Input
+                  type="password"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  required
+                />
+              </div>
+              {resetError && <p className="text-sm text-destructive">{resetError}</p>}
+              <Button type="submit" disabled={resetPasswordMutation.isPending}>
+                {resetPasswordMutation.isPending ? "Saving..." : "Set new password"}
+              </Button>
+            </form>
+          )}
+        </div>
       </Modal>
     </div>
   );

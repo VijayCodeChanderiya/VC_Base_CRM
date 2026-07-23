@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { DangerZone } from "@/components/ui/DangerZone";
 import { useRowSelection } from "@/lib/useRowSelection";
 import { BulkActionBar } from "@/components/ui/BulkActionBar";
@@ -37,6 +38,7 @@ interface Purchase {
   grandTotal: string;
   status: string;
   supplier: { name: string };
+  branch?: { organization?: { name: string; displayName: string | null } };
 }
 
 interface CartLine {
@@ -52,10 +54,22 @@ function today() {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 
+interface PurchaseBulkResult {
+  totalRecords: number;
+  created: string[];
+  failed: { reference: string; rows: number[]; reason: string }[];
+}
+
 export function Purchases() {
   const queryClient = useQueryClient();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [addOpen, setAddOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [bulkFormError, setBulkFormError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<PurchaseBulkResult | null>(null);
+  const [templateDownloading, setTemplateDownloading] = useState(false);
   const [supplierId, setSupplierId] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [purchaseDate, setPurchaseDate] = useState(today());
@@ -174,11 +188,60 @@ export function Purchases() {
     },
   });
 
+  function closeBulkModal() {
+    setBulkOpen(false);
+    setBulkFile(null);
+    setBulkResult(null);
+    setBulkFormError(null);
+  }
+
+  async function downloadPurchaseTemplate(sample: boolean) {
+    setTemplateDownloading(true);
+    try {
+      const res = await api.get("/purchases/bulk/template", {
+        params: sample ? { sample: 1 } : undefined,
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(res.data as Blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = sample ? "Purchases sample file.xlsx" : "Purchases bulk upload template.xlsx";
+      link.click();
+      window.URL.revokeObjectURL(url);
+    } finally {
+      setTemplateDownloading(false);
+    }
+  }
+
+  const bulkUploadMutation = useMutation({
+    mutationFn: async () => {
+      const form = new FormData();
+      form.append("file", bulkFile!);
+      return (await api.post("/purchases/bulk/upload", form)).data as PurchaseBulkResult;
+    },
+    onSuccess: (result) => {
+      setBulkResult(result);
+      setBulkFile(null);
+      queryClient.invalidateQueries({ queryKey: ["purchases"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (err: unknown) => {
+      setBulkFormError(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? "Failed to upload purchases"
+      );
+    },
+  });
+
   return (
     <div className="flex h-full flex-col gap-6">
       <div className="shrink-0 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Purchases</h1>
-        <Button onClick={() => setAddOpen(true)}>+ New purchase</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setBulkOpen(true)}>
+            Bulk Upload
+          </Button>
+          <Button onClick={() => setAddOpen(true)}>+ New purchase</Button>
+        </div>
       </div>
 
       <Card className="flex-1 min-h-0 flex flex-col">
@@ -192,6 +255,7 @@ export function Purchases() {
                 <th className="p-3">
                   <input type="checkbox" checked={selection.allSelected} onChange={selection.toggleAll} />
                 </th>
+                {isSuperAdmin && <th className="p-3">Organization</th>}
                 <SortableTh label="PO #" columnKey="purchaseNumber" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Invoice #" columnKey="invoiceNumber" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Date" columnKey="purchaseDate" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -204,7 +268,7 @@ export function Purchases() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td className="p-3" colSpan={8}>
+                  <td className="p-3" colSpan={isSuperAdmin ? 9 : 8}>
                     Loading...
                   </td>
                 </tr>
@@ -218,6 +282,11 @@ export function Purchases() {
                       onChange={() => selection.toggle(p.id)}
                     />
                   </td>
+                  {isSuperAdmin && (
+                    <td className="p-3 text-muted-foreground">
+                      {p.branch?.organization?.displayName || p.branch?.organization?.name || "-"}
+                    </td>
+                  )}
                   <td className="p-3">{p.purchaseNumber}</td>
                   <td className="p-3">{p.invoiceNumber ?? "-"}</td>
                   <td className="p-3">{formatDate(p.purchaseDate)}</td>
@@ -432,6 +501,85 @@ export function Purchases() {
             </p>
           )}
           {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+      </Modal>
+
+      <Modal open={bulkOpen} onClose={closeBulkModal} title="Bulk Upload Purchases" size="lg">
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-muted-foreground">
+            Each row is one product line, using the same fields as the "New purchase" cart. Give every purchase a
+            unique "PO Ref" — rows sharing the same ref become one purchase with multiple items. Rows with errors
+            are reported individually so you can fix and re-upload just those.
+          </p>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-xs text-muted-foreground">Excel file (.xlsx)</label>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={templateDownloading}
+                onClick={() => downloadPurchaseTemplate(false)}
+              >
+                {templateDownloading ? "Downloading..." : "Download template"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={templateDownloading}
+                onClick={() => downloadPurchaseTemplate(true)}
+              >
+                Download sample file
+              </Button>
+            </div>
+          </div>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setBulkFormError(null);
+              setBulkResult(null);
+              if (!bulkFile) {
+                setBulkFormError("Choose an Excel file to upload");
+                return;
+              }
+              bulkUploadMutation.mutate();
+            }}
+          >
+            <input
+              type="file"
+              accept=".xlsx"
+              className="text-sm"
+              onChange={(e) => {
+                setBulkFile(e.target.files?.[0] ?? null);
+                setBulkFormError(null);
+              }}
+            />
+            {bulkFile && <p className="text-xs text-muted-foreground">Selected: {bulkFile.name}</p>}
+            {bulkFormError && <p className="text-sm text-destructive">{bulkFormError}</p>}
+            {bulkResult && (
+              <div className="flex flex-col gap-1 rounded-md border border-border p-3 text-sm">
+                <p>Total purchases processed: {bulkResult.totalRecords}</p>
+                <p className="text-emerald-600">Successfully imported: {bulkResult.created.length}</p>
+                {bulkResult.failed.length > 0 && (
+                  <>
+                    <p className="text-destructive">Failed: {bulkResult.failed.length}</p>
+                    <ul className="max-h-48 list-disc overflow-y-auto pl-4 text-xs text-muted-foreground">
+                      {bulkResult.failed.map((f, i) => (
+                        <li key={i} className="text-destructive">
+                          {f.reference} (row{f.rows.length > 1 ? "s" : ""} {f.rows.join(", ")}): {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
+            <Button type="submit" disabled={bulkUploadMutation.isPending}>
+              {bulkUploadMutation.isPending ? "Uploading..." : "Upload"}
+            </Button>
+          </form>
         </div>
       </Modal>
     </div>

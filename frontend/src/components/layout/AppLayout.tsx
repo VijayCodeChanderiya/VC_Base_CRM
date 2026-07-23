@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -17,8 +18,6 @@ import {
   Truck,
   Package,
   Smartphone,
-  Car,
-  Wrench,
   FileText,
   ShieldAlert,
   UserCog,
@@ -27,13 +26,21 @@ import {
   Settings as SettingsIcon,
   DatabaseBackup,
   Building2,
+  MessageSquare,
+  FileCheck,
+  Megaphone,
+  Building,
+  Layers,
+  Sparkles,
 } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
+import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GlobalSearch } from "@/components/layout/GlobalSearch";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 import { BranchSelector } from "@/components/layout/BranchSelector";
+import { OrgSelector } from "@/components/layout/OrgSelector";
 
 interface NavItem {
   to: string;
@@ -59,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/imei", label: "IMEI Search", icon: ScanLine },
       { to: "/purchases", label: "Purchase", icon: ShoppingCart },
       { to: "/rma", label: "RMA", icon: RotateCcw },
+      { to: "/suppliers", label: "Supplier", icon: Truck },
     ],
   },
   {
@@ -69,6 +77,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/sales", label: "Sale", icon: ReceiptText },
       { to: "/returns", label: "Return", icon: Undo2 },
       { to: "/warranty", label: "Warranty", icon: ShieldCheck },
+      { to: "/amc", label: "AMC Contracts", icon: FileCheck },
+      { to: "/tickets", label: "Support Tickets", icon: MessageSquare },
+      { to: "/customers", label: "Customer", icon: Users },
     ],
   },
 ];
@@ -80,13 +91,11 @@ const GENERAL_GROUP: NavGroup = {
   label: "General",
   icon: LayoutGrid,
   items: [
-    { to: "/customers", label: "Customer", icon: Users },
-    { to: "/suppliers", label: "Supplier", icon: Truck },
     { to: "/products", label: "Products", icon: Package },
     { to: "/sims", label: "SIM Management", icon: Smartphone },
-    { to: "/vehicles", label: "Vehicle", icon: Car },
-    { to: "/installations", label: "Installation", icon: Wrench },
     { to: "/files", label: "Files", icon: FileText },
+    { to: "/announcements", label: "Announcements", icon: Megaphone },
+    { to: "/org-tickets", label: "Platform Support", icon: MessageSquare },
   ],
 };
 
@@ -95,12 +104,25 @@ const ADMIN_GROUP: NavGroup = {
   label: "Admin",
   icon: ShieldAlert,
   items: [
+    { to: "/my-organization", label: "My Organization", icon: Building2 },
     { to: "/users", label: "Users", icon: UserCog },
     { to: "/audit-logs", label: "Audit Logs", icon: History },
     { to: "/activity-report", label: "Activity Report", icon: Activity },
     { to: "/settings", label: "Settings", icon: SettingsIcon },
     { to: "/backup", label: "Backup & Restore", icon: DatabaseBackup },
     { to: "/branches", label: "Branches", icon: Building2 },
+  ],
+};
+
+const PLATFORM_GROUP: NavGroup = {
+  key: "platform",
+  label: "Platform",
+  icon: Layers,
+  items: [
+    { to: "/platform/organizations", label: "Organizations", icon: Building },
+    { to: "/platform/plans", label: "Plans", icon: Sparkles },
+    { to: "/platform/features", label: "Features", icon: FileCheck },
+    { to: "/platform/tickets", label: "Platform Tickets", icon: MessageSquare },
   ],
 };
 
@@ -144,10 +166,44 @@ function NavGroupSection({ group, pathname }: { group: NavGroup; pathname: strin
   );
 }
 
+interface MyOrgBranding {
+  name: string;
+  displayName: string | null;
+  hasLogo: boolean;
+}
+
+function useMyOrgBranding(isOrgScoped: boolean) {
+  const { data: branding } = useQuery({
+    queryKey: ["my-org-branding"],
+    queryFn: async () => (await api.get("/organization/me/branding")).data as MyOrgBranding,
+    enabled: isOrgScoped,
+  });
+
+  const { data: logoUrl } = useQuery({
+    queryKey: ["my-org-logo"],
+    queryFn: async () => {
+      const res = await api.get("/organization/me/branding/logo", { responseType: "blob" });
+      return URL.createObjectURL(res.data as Blob);
+    },
+    enabled: isOrgScoped && !!branding?.hasLogo,
+    staleTime: Infinity,
+  });
+
+  useEffect(() => {
+    return () => {
+      if (logoUrl) URL.revokeObjectURL(logoUrl);
+    };
+  }, [logoUrl]);
+
+  return { branding, logoUrl };
+}
+
 export function AppLayout() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const { branding, logoUrl } = useMyOrgBranding(user?.role !== "SUPER_ADMIN");
+  const headerName = branding?.displayName || branding?.name || (user?.role === "SUPER_ADMIN" ? "Alphatech Platform" : "Workspace");
 
   function handleLogout() {
     logout();
@@ -158,11 +214,19 @@ export function AppLayout() {
     <div className="flex h-screen overflow-hidden">
       <aside className="w-60 shrink-0 border-r border-border bg-card p-3.5 flex flex-col gap-1 overflow-y-auto">
         <div className="mb-4 flex items-center gap-2.5 px-1 pt-0.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-primary">
-            <div className="h-2.5 w-2.5 rounded-[3px] bg-primary-foreground" />
-          </div>
-          <div>
-            <p className="text-[15px] font-extrabold tracking-tight leading-tight">Alphatech</p>
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={headerName}
+              className="h-8 w-8 shrink-0 rounded-[9px] border border-border object-contain bg-card"
+            />
+          ) : (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-primary">
+              <div className="h-2.5 w-2.5 rounded-[3px] bg-primary-foreground" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="truncate text-[15px] font-extrabold tracking-tight leading-tight">{headerName}</p>
             <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 leading-tight">
               {user?.role ?? "Workspace"}
             </p>
@@ -188,6 +252,7 @@ export function AppLayout() {
         <NavGroupSection group={GENERAL_GROUP} pathname={pathname} />
 
         {user?.role === "ADMIN" && <NavGroupSection group={ADMIN_GROUP} pathname={pathname} />}
+        {user?.role === "SUPER_ADMIN" && <NavGroupSection group={PLATFORM_GROUP} pathname={pathname} />}
 
         <div className="mt-auto border-t border-border pt-3">
           <div className="flex items-center gap-2 px-1 pb-2.5">
@@ -205,7 +270,7 @@ export function AppLayout() {
         <header className="shrink-0 flex items-center justify-between gap-4 border-b border-border bg-card px-6 py-3">
           <GlobalSearch />
           <div className="flex items-center gap-3">
-            <BranchSelector />
+            {user?.role === "SUPER_ADMIN" ? <OrgSelector /> : <BranchSelector />}
             <NotificationBell />
           </div>
         </header>

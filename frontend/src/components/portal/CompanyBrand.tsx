@@ -21,22 +21,22 @@ export function CompanyBrand({ size = "md" }: { size?: "sm" | "md" | "lg" }) {
   const textSize = size === "lg" ? "text-xl" : size === "sm" ? "text-sm" : "text-base";
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-w-0 items-center gap-3">
       {data?.hasLogo ? (
         <img
           src="/api/public/branding/logo"
           alt={data.companyName}
-          className={`${dims} rounded-md border border-border object-contain bg-card`}
+          className={`${dims} shrink-0 rounded-md border border-border object-contain bg-card`}
         />
       ) : (
         <div
-          className={`${dims} flex items-center justify-center rounded-md bg-primary text-primary-foreground font-bold`}
+          className={`${dims} flex shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground font-bold`}
         >
           {(data?.companyName ?? "A").charAt(0).toUpperCase()}
         </div>
       )}
-      <div>
-        <p className={`${textSize} font-semibold leading-tight`}>{data?.companyName ?? "Customer Portal"}</p>
+      <div className="min-w-0">
+        <p className={`${textSize} truncate font-semibold leading-tight`}>{data?.companyName ?? "Customer Portal"}</p>
       </div>
     </div>
   );

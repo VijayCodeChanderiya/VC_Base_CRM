@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { QrCode } from "@/components/ui/qrcode";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { DangerZone } from "@/components/ui/DangerZone";
 import { useRowSelection } from "@/lib/useRowSelection";
 import { BulkActionBar } from "@/components/ui/BulkActionBar";
@@ -23,6 +24,7 @@ interface Product {
   taxPercent: string;
   hsnCode: string | null;
   inventory: { quantity: number }[];
+  organization?: { name: string; displayName: string | null };
 }
 
 const emptyForm = {
@@ -40,6 +42,7 @@ const PAGE_SIZE_OPTIONS = [10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000];
 export function Products() {
   const queryClient = useQueryClient();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [search, setSearch] = useState("");
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
   const [editTarget, setEditTarget] = useState<Product | null>(null);
@@ -63,7 +66,7 @@ export function Products() {
         page: number;
         pageSize: number;
       },
-    enabled: !!branchId,
+    enabled: isSuperAdmin || !!branchId,
   });
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
@@ -157,6 +160,7 @@ export function Products() {
                   <th className="p-3">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
+                  {isSuperAdmin && <th className="p-3">Organization</th>}
                   <SortableTh label="SKU" columnKey="sku" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Name" columnKey="name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="HSN" columnKey="hsnCode" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -181,7 +185,7 @@ export function Products() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-3" colSpan={8}>
+                    <td className="p-3" colSpan={isSuperAdmin ? 9 : 8}>
                       Loading...
                     </td>
                   </tr>
@@ -191,6 +195,11 @@ export function Products() {
                     <td className="p-3">
                       <input type="checkbox" checked={selectedIds.has(p.id)} onChange={() => toggle(p.id)} />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="p-3 text-muted-foreground">
+                        {p.organization?.displayName || p.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="p-3">{p.sku}</td>
                     <td className="p-3">{p.name}</td>
                     <td className="p-3">{p.hsnCode ?? "-"}</td>

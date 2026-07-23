@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { AxiosInstance } from "axios";
 import { api } from "@/lib/api";
 import { Modal } from "@/components/ui/modal";
 
@@ -47,15 +48,19 @@ export function DashboardDetailModal({
   type,
   branchId,
   onClose,
+  baseUrl = "/dashboard/detail",
+  apiClient = api,
 }: {
   type: string | null;
   branchId: string | null;
   onClose: () => void;
+  baseUrl?: string;
+  apiClient?: AxiosInstance;
 }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["dashboard-detail", type, branchId],
+    queryKey: ["dashboard-detail", baseUrl, type, branchId],
     queryFn: async () =>
-      (await api.get("/dashboard/detail", { params: { type, branchId } })).data as DetailResponse,
+      (await apiClient.get(baseUrl, { params: { type, branchId } })).data as DetailResponse,
     enabled: !!type,
   });
 

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useBranchStore } from "@/store/branch";
+import { useAuthStore } from "@/store/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,6 +42,7 @@ interface Sim {
   saleDate: string | null;
   customer: Customer | null;
   imeiRecord: ImeiRecord | null;
+  branch?: { organization?: { name: string; displayName: string | null } };
 }
 
 interface BulkSimResult {
@@ -116,6 +118,7 @@ export function Sims() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const branchId = useBranchStore((s) => s.branchId);
+  const isSuperAdmin = useAuthStore((s) => s.user?.role === "SUPER_ADMIN");
   const [search, setSearch] = useState("");
   const [carrierFilter, setCarrierFilter] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -176,7 +179,7 @@ export function Sims() {
         page: number;
         pageSize: number;
       },
-    enabled: !!branchId,
+    enabled: isSuperAdmin || !!branchId,
   });
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
@@ -189,7 +192,7 @@ export function Sims() {
         assigned: number;
         available: number;
       },
-    enabled: !!branchId,
+    enabled: isSuperAdmin || !!branchId,
   });
 
   const { data: customers } = useQuery({
@@ -507,6 +510,7 @@ export function Sims() {
                   <th className="p-3">
                     <input type="checkbox" checked={allSelected} onChange={toggleAll} />
                   </th>
+                  {isSuperAdmin && <th className="p-3">Organization</th>}
                   <SortableTh label="ICCID" columnKey="iccid" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="M2M Number" columnKey="msisdn" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <SortableTh label="Carrier" columnKey="carrier" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -522,7 +526,7 @@ export function Sims() {
               <tbody>
                 {isLoading && (
                   <tr>
-                    <td className="p-3" colSpan={11}>
+                    <td className="p-3" colSpan={isSuperAdmin ? 12 : 11}>
                       Loading...
                     </td>
                   </tr>
@@ -532,6 +536,11 @@ export function Sims() {
                     <td className="p-3">
                       <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggle(s.id)} />
                     </td>
+                    {isSuperAdmin && (
+                      <td className="p-3 text-muted-foreground">
+                        {s.branch?.organization?.displayName || s.branch?.organization?.name || "-"}
+                      </td>
+                    )}
                     <td className="p-3 font-mono">{s.iccid}</td>
                     <td className="p-3 font-mono">{s.msisdn ?? "-"}</td>
                     <td className="p-3">{CARRIER_OPTIONS.find((c) => c.value === s.carrier)?.label ?? s.carrier}</td>
