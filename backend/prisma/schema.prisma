@@ -16,6 +16,47 @@ enum Role {
   STAFF
   COMPANY
   RESELLER
+  SUPER_ADMIN
+}
+
+enum BillingStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum FeatureType {
+  BOOLEAN
+  LIMIT
+}
+
+enum PlatformTicketStatus {
+  OPEN
+  IN_PROGRESS
+  AWAITING_ORG
+  RESOLVED
+  CLOSED
+}
+
+enum PlatformTicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum PlatformTicketCategory {
+  BILLING
+  PLAN_UPGRADE
+  TECHNICAL
+  BUG
+  OTHER
+}
+
+enum PlatformTicketSenderType {
+  ORG
+  SUPER_ADMIN
 }
 
 enum ImeiStatus {
@@ -139,20 +180,57 @@ enum CustomerSource {
   OTHER
 }
 
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  AWAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TicketCategory {
+  WARRANTY
+  BILLING
+  TECHNICAL
+  SUBSCRIPTION
+  INSTALLATION
+  OTHER
+}
+
+enum TicketSenderType {
+  CUSTOMER
+  STAFF
+}
+
+enum AmcStatus {
+  ACTIVE
+  EXPIRING_SOON
+  EXPIRED
+  CANCELLED
+}
+
 // ------------------------------------------------------------------
 // Users & Access Control
 // ------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(uuid())
-  name         String
-  email        String   @unique
-  phone        String?
-  passwordHash String
-  role         Role     @default(STAFF)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String        @id @default(uuid())
+  name           String
+  email          String        @unique
+  phone          String?
+  passwordHash   String
+  role           Role          @default(STAFF)
+  isActive       Boolean       @default(true)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   sales          Sale[]
   purchases      Purchase[]
@@ -161,8 +239,17 @@ model User {
   filesUploaded  File[]
   installations  InstallationRecord[]
   simRenewals    SimRenewal[]
+  assignedTickets      SupportTicket[]  @relation("TicketAssignee")
+  ticketMessages       TicketMessage[]
+  amcContractsCreated  AmcContract[]
+  announcementsCreated Announcement[]
+  overridesCreated        OrganizationFeatureOverride[] @relation("OverrideCreatedBy")
+  platformTicketsCreated  PlatformTicket[]               @relation("PlatformTicketRaisedBy")
+  platformAssignedTickets PlatformTicket[]               @relation("PlatformTicketAssignee")
+  platformTicketMessages  PlatformTicketMessage[]
 
   @@index([role])
+  @@index([organizationId])
 }
 
 // ------------------------------------------------------------------
@@ -170,12 +257,14 @@ model User {
 // ------------------------------------------------------------------
 
 model Branch {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  name      String
-  address   String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id             String       @id @default(uuid())
+  code           String
+  name           String
+  address        String?
+  isActive       Boolean      @default(true)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime     @default(now())
 
   inventory     Inventory[]
   imeiRecords   ImeiRecord[]
@@ -186,6 +275,9 @@ model Branch {
   vehicles      Vehicle[]
   installations InstallationRecord[]
   rmas          Rma[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
 }
 
 // ------------------------------------------------------------------
@@ -193,20 +285,22 @@ model Branch {
 // ------------------------------------------------------------------
 
 model Customer {
-  id           String          @id @default(uuid())
-  name         String
-  email        String?         @unique
-  phone        String          @unique
-  username     String?         @unique
-  city         String?
-  address      String?
-  company      String?
-  gstNumber    String?
-  source       CustomerSource?
-  notes        String?
-  passwordHash String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  id             String          @id @default(uuid())
+  name           String
+  email          String?
+  phone          String
+  username       String?
+  city           String?
+  address        String?
+  company        String?
+  gstNumber      String?
+  source         CustomerSource?
+  notes          String?
+  passwordHash   String?
+  organizationId String
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   sales           Sale[]
   returns         Return[]
@@ -214,7 +308,15 @@ model Customer {
   payments        Payment[]
   sims            Sim[]
   vehicles        Vehicle[]
+  tickets         SupportTicket[]
+  ticketMessages  TicketMessage[]
+  amcContracts    AmcContract[]
+  notifications   Notification[]
 
+  @@unique([organizationId, email])
+  @@unique([organizationId, phone])
+  @@unique([organizationId, username])
+  @@index([organizationId])
   @@index([phone])
   @@index([email])
 }
@@ -223,7 +325,7 @@ model Supplier {
   id                String   @id @default(uuid())
   name              String
   email             String?
-  phone             String   @unique
+  phone             String
   contactPerson     String?
   alternatePhone    String?
   address           String?
@@ -241,6 +343,8 @@ model Supplier {
   creditLimit       Decimal? @db.Decimal(12, 2)
   website           String?
   notes             String?
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -248,6 +352,9 @@ model Supplier {
   products    Product[]
   rmas        Rma[]
   imeiRecords ImeiRecord[]
+
+  @@unique([organizationId, phone])
+  @@index([organizationId])
 }
 
 // ------------------------------------------------------------------
@@ -266,7 +373,7 @@ model Category {
 
 model Product {
   id             String   @id @default(uuid())
-  sku            String   @unique
+  sku            String
   name           String
   description    String?
   brand          String?
@@ -282,6 +389,8 @@ model Product {
   supplierId     String?
   supplier       Supplier? @relation(fields: [supplierId], references: [id])
   isActive       Boolean  @default(true)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -291,6 +400,8 @@ model Product {
   purchaseItems    PurchaseItem[]
   inventoryTxns    InventoryTransaction[]
 
+  @@unique([organizationId, sku])
+  @@index([organizationId])
   @@index([name])
 }
 
@@ -346,6 +457,8 @@ model ImeiRecord {
   sim            Sim?
   installations  InstallationRecord[]
   rmas           Rma[]
+  tickets        SupportTicket[]
+  amcContracts   AmcContract[]
 
   @@index([status])
   @@index([productId])
@@ -382,6 +495,7 @@ model Sale {
   items    SaleItem[]
   returns  Return[]
   payments Payment[]
+  tickets  SupportTicket[]
 
   @@index([customerId])
   @@index([invoiceNumber])
@@ -541,30 +655,36 @@ model Payment {
 // ------------------------------------------------------------------
 
 model Notification {
-  id        String            @id @default(uuid())
-  userId    String
-  user      User              @relation(fields: [userId], references: [id])
-  type      NotificationType  @default(INFO)
-  title     String
-  message   String
-  isRead    Boolean           @default(false)
-  createdAt DateTime          @default(now())
+  id         String            @id @default(uuid())
+  userId     String?
+  user       User?             @relation(fields: [userId], references: [id])
+  customerId String?
+  customer   Customer?         @relation(fields: [customerId], references: [id])
+  type       NotificationType  @default(INFO)
+  title      String
+  message    String
+  isRead     Boolean           @default(false)
+  createdAt  DateTime          @default(now())
 
   @@index([userId, isRead])
+  @@index([customerId, isRead])
 }
 
 model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id])
-  action     String
-  entityType String
-  entityId   String?
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  id             String        @id @default(uuid())
+  userId         String?
+  user           User?         @relation(fields: [userId], references: [id])
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime      @default(now())
 
   @@index([entityType, entityId])
   @@index([userId])
+  @@index([organizationId])
 }
 
 model File {
@@ -652,6 +772,7 @@ model Vehicle {
   updatedAt          DateTime @updatedAt
 
   installations InstallationRecord[]
+  amcContracts  AmcContract[]
 
   @@index([ownerCustomerId])
   @@index([branchId])
@@ -705,4 +826,243 @@ model Rma {
   @@index([supplierId])
   @@index([status])
   @@index([branchId])
+}
+
+// ------------------------------------------------------------------
+// Customer Portal: Support Tickets, AMC, Announcements
+// ------------------------------------------------------------------
+
+model SupportTicket {
+  id                  String          @id @default(uuid())
+  ticketNumber        String          @unique
+  customerId          String
+  customer            Customer        @relation(fields: [customerId], references: [id])
+  subject             String
+  category            TicketCategory  @default(OTHER)
+  priority            TicketPriority  @default(MEDIUM)
+  status              TicketStatus    @default(OPEN)
+  relatedSaleId       String?
+  relatedSale         Sale?           @relation(fields: [relatedSaleId], references: [id])
+  relatedImeiRecordId String?
+  relatedImeiRecord   ImeiRecord?     @relation(fields: [relatedImeiRecordId], references: [id])
+  assignedToId        String?
+  assignedTo          User?           @relation("TicketAssignee", fields: [assignedToId], references: [id])
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  closedAt            DateTime?
+
+  messages TicketMessage[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([assignedToId])
+}
+
+model TicketMessage {
+  id               String            @id @default(uuid())
+  ticketId         String
+  ticket           SupportTicket     @relation(fields: [ticketId], references: [id])
+  senderType       TicketSenderType
+  senderCustomerId String?
+  senderCustomer   Customer?         @relation(fields: [senderCustomerId], references: [id])
+  senderUserId     String?
+  senderUser       User?             @relation(fields: [senderUserId], references: [id])
+  message          String
+  createdAt        DateTime          @default(now())
+
+  @@index([ticketId])
+}
+
+model AmcContract {
+  id             String          @id @default(uuid())
+  contractNumber String          @unique
+  customerId     String
+  customer       Customer        @relation(fields: [customerId], references: [id])
+  vehicleId      String?
+  vehicle        Vehicle?        @relation(fields: [vehicleId], references: [id])
+  imeiRecordId   String?
+  imeiRecord     ImeiRecord?     @relation(fields: [imeiRecordId], references: [id])
+  startDate      DateTime
+  endDate        DateTime
+  status         AmcStatus       @default(ACTIVE)
+  billingAmount  Decimal         @db.Decimal(12, 2)
+  billingCycle   SimBillingCycle @default(YEARLY)
+  autoRenew      Boolean         @default(false)
+  lastRenewedAt  DateTime?
+  notes          String?
+  createdById    String?
+  createdBy      User?           @relation(fields: [createdById], references: [id])
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@index([endDate])
+}
+
+model Announcement {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  title          String
+  message        String
+  type           NotificationType @default(INFO)
+  isActive       Boolean          @default(true)
+  publishedAt    DateTime         @default(now())
+  expiresAt      DateTime?
+  createdById    String?
+  createdBy      User?            @relation(fields: [createdById], references: [id])
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([isActive, publishedAt])
+  @@index([organizationId])
+}
+
+// ------------------------------------------------------------------
+// Multi-tenant SaaS core: Organizations, Plans, Features, Entitlements,
+// Platform Support Tickets (tenant org <-> Alphatech platform team)
+// ------------------------------------------------------------------
+
+model Organization {
+  id            String        @id @default(uuid())
+  name          String
+  displayName   String?
+  slug          String        @unique
+  billingStatus BillingStatus @default(TRIAL)
+  planId        String?
+  trialEndsAt   DateTime?
+  isActive      Boolean       @default(true)
+  notes         String?
+
+  companyEmail           String?
+  mobileNumber           String?
+  alternateContactNumber String?
+  gstNumber              String?
+  panNumber              String?
+  cinNumber              String?
+  website                String?
+  industryType           String?
+  businessType           String?
+
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  state        String?
+  country      String?
+  pincode      String?
+
+  ownerName        String?
+  ownerDesignation String?
+  ownerEmail       String?
+  ownerMobile      String?
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  plan             Plan?                         @relation(fields: [planId], references: [id])
+  branches         Branch[]
+  users            User[]
+  featureOverrides OrganizationFeatureOverride[]
+  platformTickets  PlatformTicket[]
+  customers        Customer[]
+  suppliers        Supplier[]
+  products         Product[]
+  auditLogs        AuditLog[]
+  announcements    Announcement[]
+
+  @@index([billingStatus])
+}
+
+model Feature {
+  id          String      @id @default(uuid())
+  key         String      @unique
+  label       String
+  description String?
+  type        FeatureType
+  createdAt   DateTime    @default(now())
+
+  planFeatures PlanFeature[]
+  overrides    OrganizationFeatureOverride[]
+}
+
+model Plan {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organizations Organization[]
+  planFeatures  PlanFeature[]
+}
+
+model PlanFeature {
+  id        String   @id @default(uuid())
+  planId    String
+  featureId String
+  boolValue Boolean?
+  numValue  Int?
+
+  plan    Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, featureId])
+}
+
+model OrganizationFeatureOverride {
+  id             String   @id @default(uuid())
+  organizationId String
+  featureId      String
+  boolValue      Boolean?
+  numValue       Int?
+  reason         String?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  feature      Feature      @relation(fields: [featureId], references: [id], onDelete: Cascade)
+  createdBy    User?        @relation("OverrideCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([organizationId, featureId])
+}
+
+model PlatformTicket {
+  id             String                 @id @default(uuid())
+  ticketNumber   String                 @unique
+  organizationId String
+  subject        String
+  category       PlatformTicketCategory @default(OTHER)
+  priority       PlatformTicketPriority @default(MEDIUM)
+  status         PlatformTicketStatus   @default(OPEN)
+  raisedById     String
+  assignedToId   String?
+  closedAt       DateTime?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  organization Organization            @relation(fields: [organizationId], references: [id])
+  raisedBy     User                    @relation("PlatformTicketRaisedBy", fields: [raisedById], references: [id])
+  assignedTo   User?                   @relation("PlatformTicketAssignee", fields: [assignedToId], references: [id])
+  messages     PlatformTicketMessage[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model PlatformTicketMessage {
+  id           String                   @id @default(uuid())
+  ticketId     String
+  senderType   PlatformTicketSenderType
+  senderUserId String
+  message      String
+  createdAt    DateTime                 @default(now())
+
+  ticket     PlatformTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  senderUser User           @relation(fields: [senderUserId], references: [id])
+
+  @@index([ticketId])
 }

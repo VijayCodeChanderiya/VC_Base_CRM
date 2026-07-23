@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: npm install && npx prisma generate && npm run build
-    startCommand: npx prisma migrate deploy && npm start
+    startCommand: (npx prisma migrate deploy || (sleep 5 && npx prisma migrate deploy) || (sleep 10 && npx prisma migrate deploy)) && npm start
     envVars:
       - key: DATABASE_URL
         sync: false
