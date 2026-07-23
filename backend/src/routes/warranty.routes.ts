@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, authorize } from "@/middleware/auth";
+import { authenticate, authorize, requireOrgContext } from "@/middleware/auth";
 import {
   listWarrantyClaims,
   createWarrantyClaim,
@@ -10,7 +10,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, requireOrgContext);
 router.get("/", listWarrantyClaims);
 router.post("/", authorize("ADMIN", "STAFF"), createWarrantyClaim);
 router.patch("/:id", authorize("ADMIN", "STAFF"), updateWarrantyClaim);

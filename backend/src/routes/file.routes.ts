@@ -7,7 +7,7 @@ const router = Router();
 router.use(authenticate);
 router.get("/", listFiles);
 router.get("/:id/download", downloadFile);
-router.post("/", authorize("ADMIN", "STAFF"), uploadMiddleware, uploadFile);
+router.post("/", authorize("ADMIN", "STAFF", "SUPER_ADMIN"), uploadMiddleware, uploadFile);
 router.delete("/:id", authorize("ADMIN"), deleteFile);
 
 export default router;

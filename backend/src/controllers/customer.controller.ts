@@ -7,6 +7,7 @@ import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { phoneSchema, emailSchema } from "@/utils/validators";
 import { parseSortOrder } from "@/utils/sort";
+import { resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 
 const CUSTOMER_SORT_FIELDS: Record<string, Prisma.CustomerOrderByWithRelationInput> = {
   name: { name: "asc" },
@@ -49,22 +50,27 @@ export async function listCustomers(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
   const search = (req.query.search as string) ?? "";
+  const organizationId = resolveOrgFilterMode(req);
 
-  const where = search
-    ? {
-        OR: [
-          { name: { contains: search, mode: "insensitive" as const } },
-          { phone: { contains: search, mode: "insensitive" as const } },
-          { email: { contains: search, mode: "insensitive" as const } },
-          { company: { contains: search, mode: "insensitive" as const } },
-        ],
-      }
-    : {};
+  const where = {
+    ...(organizationId ? { organizationId } : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" as const } },
+            { phone: { contains: search, mode: "insensitive" as const } },
+            { email: { contains: search, mode: "insensitive" as const } },
+            { company: { contains: search, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
 
   const [items, total] = await Promise.all([
     prisma.customer.findMany({
       where,
       include: {
+        organization: { select: ORG_SUMMARY_SELECT },
         sims: {
           select: { id: true, iccid: true, carrier: true, billingCycle: true, status: true, expiryDate: true },
         },
@@ -80,20 +86,25 @@ export async function listCustomers(req: Request, res: Response) {
 }
 
 export async function getCustomer(req: Request, res: Response) {
-  const customer = await prisma.customer.findUniqueOrThrow({
-    where: { id: req.params.id },
+  const organizationId = resolveOrgFilterMode(req);
+  const customer = await prisma.customer.findFirst({
+    where: { id: req.params.id, ...(organizationId ? { organizationId } : {}) },
     include: {
+      organization: { select: ORG_SUMMARY_SELECT },
       sales: { include: { items: { include: { product: true, imei: true } } }, orderBy: { createdAt: "desc" } },
       warrantyClaims: true,
     },
   });
+  if (!customer) throw new AppError("Customer not found", 404);
   res.json(omitPasswordHash(customer));
 }
 
 export async function createCustomer(req: Request, res: Response) {
   const { password, ...rest } = createCustomerSchema.parse(req.body);
   const passwordHash = await bcrypt.hash(password, 10);
-  const customer = await prisma.customer.create({ data: { ...rest, passwordHash } });
+  const customer = await prisma.customer.create({
+    data: { ...rest, passwordHash, organizationId: req.user!.organizationId! },
+  });
 
   await logAudit(prisma, {
     userId: req.user!.sub,
@@ -108,6 +119,11 @@ export async function createCustomer(req: Request, res: Response) {
 
 export async function updateCustomer(req: Request, res: Response) {
   const { password, ...rest } = updateCustomerSchema.parse(req.body);
+  const existing = await prisma.customer.findFirst({
+    where: { id: req.params.id, organizationId: req.user!.organizationId! },
+  });
+  if (!existing) throw new AppError("Customer not found", 404);
+
   const data: Record<string, unknown> = { ...rest };
   if (password) {
     data.passwordHash = await bcrypt.hash(password, 10);
@@ -116,8 +132,9 @@ export async function updateCustomer(req: Request, res: Response) {
   res.json(omitPasswordHash(customer));
 }
 
-async function deleteCustomerCore(id: string, userId: string): Promise<void> {
-  const customer = await prisma.customer.findUniqueOrThrow({ where: { id } });
+async function deleteCustomerCore(id: string, userId: string, organizationId: string): Promise<void> {
+  const customer = await prisma.customer.findFirst({ where: { id, organizationId } });
+  if (!customer) throw new AppError("Customer not found", 404);
 
   const [saleCount, returnCount, warrantyClaimCount, paymentCount, simCount] = await Promise.all([
     prisma.sale.count({ where: { customerId: id } }),
@@ -150,18 +167,19 @@ async function deleteCustomerCore(id: string, userId: string): Promise<void> {
 }
 
 export async function deleteCustomer(req: Request, res: Response) {
-  await deleteCustomerCore(req.params.id, req.user!.sub);
+  await deleteCustomerCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
 export async function bulkDeleteCustomers(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
+  const organizationId = req.user!.organizationId!;
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deleteCustomerCore(id, req.user!.sub);
+      await deleteCustomerCore(id, req.user!.sub, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof AppError ? err.message : "Failed to delete customer" });

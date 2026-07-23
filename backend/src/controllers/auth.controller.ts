@@ -6,14 +6,20 @@ import { prisma } from "@/config/prisma";
 import { signToken } from "@/utils/jwt";
 import { AppError } from "@/utils/AppError";
 import { optionalPhoneSchema, emailSchema } from "@/utils/validators";
+import { getDefaultOrganizationId } from "@/utils/org";
 
-const registerSchema = z.object({
-  name: z.string().min(2),
-  email: emailSchema,
-  phone: optionalPhoneSchema,
-  password: z.string().min(8),
-  role: z.nativeEnum(Role).optional(),
-});
+const registerSchema = z
+  .object({
+    name: z.string().min(2),
+    email: emailSchema,
+    phone: optionalPhoneSchema,
+    password: z.string().min(8),
+    role: z.nativeEnum(Role).optional(),
+  })
+  .refine((data) => data.role !== Role.SUPER_ADMIN, {
+    message: "Cannot self-register as SUPER_ADMIN",
+    path: ["role"],
+  });
 
 const loginSchema = z.object({
   email: emailSchema,
@@ -29,6 +35,7 @@ export async function register(req: Request, res: Response) {
   }
 
   const passwordHash = await bcrypt.hash(data.password, 10);
+  const organizationId = await getDefaultOrganizationId();
   const user = await prisma.user.create({
     data: {
       name: data.name,
@@ -36,13 +43,14 @@ export async function register(req: Request, res: Response) {
       phone: data.phone,
       passwordHash,
       role: data.role ?? Role.STAFF,
+      organizationId,
     },
   });
 
-  const token = signToken({ sub: user.id, role: user.role, email: user.email });
+  const token = signToken({ sub: user.id, role: user.role, email: user.email, organizationId: user.organizationId });
   res.status(201).json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, organizationId: user.organizationId },
   });
 }
 
@@ -59,14 +67,14 @@ export async function login(req: Request, res: Response) {
     throw new AppError("Invalid credentials", 401);
   }
 
-  const token = signToken({ sub: user.id, role: user.role, email: user.email });
+  const token = signToken({ sub: user.id, role: user.role, email: user.email, organizationId: user.organizationId });
   res.json({
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: { id: user.id, name: user.name, email: user.email, role: user.role, organizationId: user.organizationId },
   });
 }
 
 export async function me(req: Request, res: Response) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.sub } });
-  res.json({ id: user.id, name: user.name, email: user.email, role: user.role });
+  res.json({ id: user.id, name: user.name, email: user.email, role: user.role, organizationId: user.organizationId });
 }

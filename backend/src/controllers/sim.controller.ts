@@ -1,3 +1,5 @@
+import path from "node:path";
+import fs from "node:fs";
 import { Request, Response } from "express";
 import { z } from "zod";
 import multer from "multer";
@@ -7,10 +9,47 @@ import { Prisma, SimCarrier, SimBillingCycle } from "@prisma/client";
 import { prisma } from "@/config/prisma";
 import { AppError } from "@/utils/AppError";
 import { resolveBranchId } from "@/utils/branch";
+import { assertCustomerInOrg, resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 import { logAudit } from "@/utils/audit";
 import { iccidSchema, optionalM2mNumberSchema } from "@/utils/validators";
 import { formatDate } from "@/utils/date";
 import { parseSortOrder } from "@/utils/sort";
+import { UPLOADS_DIR } from "@/config/storage";
+import { getOrganizationLogoFile } from "@/utils/orgBranding";
+
+async function getStaffBrandingHeaderInfo(organizationId: string | null) {
+  if (!organizationId) return { companyName: "Alphatech CRM", logo: null };
+  const org = await prisma.organization.findUnique({
+    where: { id: organizationId },
+    select: { name: true, displayName: true },
+  });
+  const logo = await getOrganizationLogoFile(organizationId);
+  return { companyName: org?.displayName || org?.name || "Alphatech CRM", logo };
+}
+
+function drawPdfBrandingHeader(
+  doc: PDFKit.PDFDocument,
+  companyName: string,
+  logo: { path: string } | null,
+  title: string
+) {
+  if (logo) {
+    const logoPath = path.join(UPLOADS_DIR, logo.path);
+    if (fs.existsSync(logoPath)) {
+      try {
+        doc.image(logoPath, 40, 30, { width: 60 });
+      } catch {
+        // ignore unreadable/unsupported image formats, fall back to text-only header
+      }
+    }
+  }
+  doc
+    .fontSize(16)
+    .text(companyName, 110, 35, { align: "left" })
+    .fontSize(10)
+    .fillColor("#555555")
+    .text(title, 110, 55);
+}
 
 const SIM_SORT_FIELDS: Record<string, Prisma.SimOrderByWithRelationInput> = {
   iccid: { iccid: "asc" },
@@ -94,8 +133,10 @@ export async function listSims(req: Request, res: Response) {
   const carrier = req.query.carrier as string | undefined;
   const branchId = req.query.branchId as string | undefined;
   const customerId = req.query.customerId as string | undefined;
+  const organizationId = resolveOrgFilterMode(req);
 
   const where = {
+    ...(organizationId ? { branch: { organizationId } } : {}),
     ...(search
       ? {
           OR: [
@@ -113,7 +154,11 @@ export async function listSims(req: Request, res: Response) {
   const [items, total] = await Promise.all([
     prisma.sim.findMany({
       where,
-      include: { customer: true, imeiRecord: { include: { product: true } }, branch: true },
+      include: {
+        customer: true,
+        imeiRecord: { include: { product: true } },
+        branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
+      },
       skip: (page - 1) * pageSize,
       take: pageSize,
       orderBy: parseSortOrder(req, SIM_SORT_FIELDS, { createdAt: "desc" }),
@@ -126,7 +171,8 @@ export async function listSims(req: Request, res: Response) {
 
 export async function getSimStats(req: Request, res: Response) {
   const branchId = req.query.branchId as string | undefined;
-  const where = branchId ? { branchId } : {};
+  const organizationId = resolveOrgFilterMode(req);
+  const where = { ...(organizationId ? { branch: { organizationId } } : {}), ...(branchId ? { branchId } : {}) };
 
   const [total, assigned, available] = await Promise.all([
     prisma.sim.count({ where }),
@@ -139,7 +185,7 @@ export async function getSimStats(req: Request, res: Response) {
 
 export async function createSim(req: Request, res: Response) {
   const data = simSchema.parse(req.body);
-  const branchId = await resolveBranchId(data.branchId);
+  const branchId = await resolveBranchId(req.user!.organizationId!, data.branchId);
   const purchaseDate = parseOptionalDate(data.purchaseDate, "purchase date");
 
   const sim = await prisma.sim.create({
@@ -242,7 +288,7 @@ const bulkSimSchema = z.object({
 
 export async function bulkCreateSims(req: Request, res: Response) {
   const data = bulkSimSchema.parse(req.body);
-  const branchId = await resolveBranchId(data.branchId);
+  const branchId = await resolveBranchId(req.user!.organizationId!, data.branchId);
   const purchaseDate = parseOptionalDate(data.purchaseDate, "date of uploading");
 
   const result = await createSimsFromEntries(data.entries, data.carrier, branchId, purchaseDate, req.user!.sub);
@@ -276,7 +322,7 @@ export async function bulkUploadSimsFromExcel(req: Request, res: Response) {
     throw new AppError("No file uploaded", 422);
   }
   const fields = bulkSimUploadFieldsSchema.parse(req.body);
-  const branchId = await resolveBranchId(fields.branchId);
+  const branchId = await resolveBranchId(req.user!.organizationId!, fields.branchId);
   const defaultPurchaseDate = parseOptionalDate(fields.purchaseDate, "date of uploading");
 
   const workbook = new ExcelJS.Workbook();
@@ -390,6 +436,7 @@ export async function exportCustomerSimsExcel(req: Request, res: Response) {
 
 export async function exportCustomerSimsPdf(req: Request, res: Response) {
   const { customer, sims } = await loadCustomerSims(req.params.customerId);
+  const { companyName, logo } = await getStaffBrandingHeaderInfo(req.user!.organizationId);
 
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${customer.name.replace(/[^a-z0-9]/gi, "_")}-sims.pdf"`);
@@ -397,8 +444,8 @@ export async function exportCustomerSimsPdf(req: Request, res: Response) {
   const doc = new PDFDocument({ margin: 40, size: "A4" });
   doc.pipe(res);
 
-  doc.fontSize(16).text("Customer SIM Details", { align: "left" });
-  doc.moveDown(0.5);
+  drawPdfBrandingHeader(doc, companyName, logo, "Customer SIM Details");
+  doc.moveDown(3);
   doc.fontSize(11).fillColor("#000000").text(`Customer: ${customer.name}`);
   doc.fontSize(10).fillColor("#555555").text(`Phone: ${customer.phone}`);
   doc.moveDown(1);
@@ -482,6 +529,7 @@ export async function updateSim(req: Request, res: Response) {
       updateData.billingCycle = null;
       updateData.expiryDate = null;
     } else {
+      await assertCustomerInOrg(data.customerId, req.user!.organizationId!);
       updateData.customer = { connect: { id: data.customerId } };
       updateData.status = "ASSIGNED";
       const effectiveSaleDate = saleDate ?? existing.saleDate ?? new Date();
@@ -522,6 +570,9 @@ export async function assignSim(req: Request, res: Response) {
   if (sim.status !== "AVAILABLE" && (data.customerId || data.imeiRecordId)) {
     throw new AppError("SIM is not available for assignment", 409);
   }
+  if (data.customerId) {
+    await assertCustomerInOrg(data.customerId, req.user!.organizationId!);
+  }
 
   const effectiveSaleDate = data.customerId || data.imeiRecordId ? (saleDate ?? new Date()) : undefined;
   const updated = await prisma.sim.update({
@@ -557,10 +608,7 @@ export async function bulkAssignSims(req: Request, res: Response) {
   const data = bulkAssignSchema.parse(req.body);
   const saleDate = parseOptionalDate(data.saleDate, "sale date");
 
-  const customer = await prisma.customer.findUnique({ where: { id: data.customerId } });
-  if (!customer) {
-    throw new AppError("Client not found", 404);
-  }
+  await assertCustomerInOrg(data.customerId, req.user!.organizationId!);
 
   const assigned: string[] = [];
   const failed: { id: string; reason: string }[] = [];

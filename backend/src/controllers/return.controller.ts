@@ -6,6 +6,7 @@ import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { notifyAdmins } from "@/utils/notify";
 import { parseSortOrder } from "@/utils/sort";
+import { resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 
 const returnItemSchema = z.object({
   saleItemId: z.string().uuid(),
@@ -31,39 +32,50 @@ const RETURN_SORT_FIELDS: Record<string, Prisma.ReturnOrderByWithRelationInput> 
 export async function listReturns(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
+  const organizationId = resolveOrgFilterMode(req);
+  const where = organizationId ? { customer: { organizationId } } : {};
 
   const [items, total] = await Promise.all([
     prisma.return.findMany({
-      include: { customer: true, sale: true, items: true },
+      where,
+      include: {
+        customer: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
+        sale: true,
+        items: true,
+      },
       skip: (page - 1) * pageSize,
       take: pageSize,
       orderBy: parseSortOrder(req, RETURN_SORT_FIELDS, { createdAt: "desc" }),
     }),
-    prisma.return.count(),
+    prisma.return.count({ where }),
   ]);
 
   res.json({ items, total, page, pageSize });
 }
 
 export async function getReturn(req: Request, res: Response) {
-  const rec = await prisma.return.findUniqueOrThrow({
-    where: { id: req.params.id },
+  const organizationId = resolveOrgFilterMode(req);
+  const rec = await prisma.return.findFirst({
+    where: { id: req.params.id, ...(organizationId ? { customer: { organizationId } } : {}) },
     include: {
-      customer: true,
+      customer: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
       sale: true,
       items: { include: { saleItem: { include: { product: true, imei: true } } } },
     },
   });
+  if (!rec) throw new AppError("Return not found", 404);
   res.json(rec);
 }
 
 export async function createReturn(req: Request, res: Response) {
   const data = returnSchema.parse(req.body);
+  const organizationId = req.user!.organizationId!;
 
-  const sale = await prisma.sale.findUniqueOrThrow({
-    where: { id: data.saleId },
+  const sale = await prisma.sale.findFirst({
+    where: { id: data.saleId, branch: { organizationId } },
     include: { items: true },
   });
+  if (!sale) throw new AppError("Sale not found", 404);
   const saleItemMap = new Map(sale.items.map((i) => [i.id, i]));
 
   for (const item of data.items) {
@@ -114,13 +126,14 @@ export async function createReturn(req: Request, res: Response) {
 export async function approveReturn(req: Request, res: Response) {
   const userId = req.user!.sub;
 
-  const rec = await prisma.return.findUniqueOrThrow({
-    where: { id: req.params.id },
+  const rec = await prisma.return.findFirst({
+    where: { id: req.params.id, customer: { organizationId: req.user!.organizationId! } },
     include: {
       sale: true,
       items: { include: { saleItem: { include: { product: true, imei: true } } } },
     },
   });
+  if (!rec) throw new AppError("Return not found", 404);
 
   if (rec.status !== "PENDING") {
     throw new AppError("Only pending returns can be approved", 409);
@@ -178,7 +191,10 @@ export async function approveReturn(req: Request, res: Response) {
 
 export async function rejectReturn(req: Request, res: Response) {
   const userId = req.user!.sub;
-  const rec = await prisma.return.findUniqueOrThrow({ where: { id: req.params.id } });
+  const rec = await prisma.return.findFirst({
+    where: { id: req.params.id, customer: { organizationId: req.user!.organizationId! } },
+  });
+  if (!rec) throw new AppError("Return not found", 404);
 
   if (rec.status !== "PENDING") {
     throw new AppError("Only pending returns can be rejected", 409);
@@ -199,8 +215,11 @@ export async function rejectReturn(req: Request, res: Response) {
   res.json(updated);
 }
 
-export async function deleteReturnCore(id: string, userId?: string | null) {
-  const rec = await prisma.return.findUniqueOrThrow({ where: { id } });
+export async function deleteReturnCore(id: string, userId?: string | null, organizationId?: string) {
+  const rec = await prisma.return.findFirst({
+    where: { id, ...(organizationId ? { customer: { organizationId } } : {}) },
+  });
+  if (!rec) throw new AppError("Return not found", 404);
 
   await prisma.returnItem.deleteMany({ where: { returnId: id } });
   await prisma.return.delete({ where: { id } });
@@ -215,7 +234,7 @@ export async function deleteReturnCore(id: string, userId?: string | null) {
 }
 
 export async function deleteReturn(req: Request, res: Response) {
-  await deleteReturnCore(req.params.id, req.user!.sub);
+  await deleteReturnCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
@@ -226,13 +245,14 @@ const bulkDeleteSchema = z.object({
 export async function bulkDeleteReturns(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
   const userId = req.user!.sub;
+  const organizationId = req.user!.organizationId!;
 
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deleteReturnCore(id, userId);
+      await deleteReturnCore(id, userId, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof Error ? err.message : "Unknown error" });

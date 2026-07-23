@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, authorize } from "@/middleware/auth";
+import { authenticate, authorize, requireOrgContext } from "@/middleware/auth";
 import {
   listSims,
   getSimStats,
@@ -22,7 +22,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, requireOrgContext);
 router.get("/", listSims);
 router.get("/stats", getSimStats);
 router.get("/bulk/template", downloadSimBulkTemplate);

@@ -5,6 +5,7 @@ import { prisma } from "@/config/prisma";
 import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { parseSortOrder } from "@/utils/sort";
+import { assertUnderLimit } from "@/utils/entitlements";
 
 const BRANCH_SORT_FIELDS: Record<string, Prisma.BranchOrderByWithRelationInput> = {
   code: { code: "asc" },
@@ -24,14 +25,23 @@ const bulkDeleteSchema = z.object({ ids: z.array(z.string().uuid()).min(1) });
 export async function listBranches(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
+  const organizationId = req.user!.organizationId;
+
+  // SUPER_ADMIN has no organizationId (platform-level, not tenant-scoped) — this
+  // tenant-facing endpoint isn't meaningful for them, so return an empty page rather
+  // than erroring; they manage branches per-org via the Platform > Organizations screens.
+  if (!organizationId) {
+    return res.json({ items: [], total: 0, page, pageSize });
+  }
 
   const [branches, total] = await Promise.all([
     prisma.branch.findMany({
+      where: { organizationId },
       orderBy: parseSortOrder(req, BRANCH_SORT_FIELDS, { createdAt: "asc" }),
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
-    prisma.branch.count(),
+    prisma.branch.count({ where: { organizationId } }),
   ]);
 
   res.json({ items: branches, total, page, pageSize });
@@ -39,7 +49,18 @@ export async function listBranches(req: Request, res: Response) {
 
 export async function createBranch(req: Request, res: Response) {
   const data = branchSchema.parse(req.body);
-  const branch = await prisma.branch.create({ data });
+  const organizationId = req.user!.organizationId;
+  if (!organizationId) {
+    throw new AppError("SUPER_ADMIN accounts cannot create branches directly — use Platform > Organizations", 400);
+  }
+
+  await assertUnderLimit(
+    organizationId,
+    "maxBranches",
+    await prisma.branch.count({ where: { organizationId } })
+  );
+
+  const branch = await prisma.branch.create({ data: { ...data, organizationId } });
 
   await logAudit(prisma, {
     userId: req.user!.sub,

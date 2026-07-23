@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, authorize } from "@/middleware/auth";
+import { authenticate, authorize, requireOrgContext } from "@/middleware/auth";
 import {
   listReturns,
   getReturn,
@@ -12,7 +12,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, requireOrgContext);
 router.get("/", listReturns);
 router.get("/:id", getReturn);
 router.post("/", authorize("ADMIN", "STAFF"), createReturn);

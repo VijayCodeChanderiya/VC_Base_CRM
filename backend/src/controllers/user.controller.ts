@@ -7,6 +7,7 @@ import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { optionalPhoneSchema, emailSchema } from "@/utils/validators";
 import { parseSortOrder } from "@/utils/sort";
+import { assertUnderLimit } from "@/utils/entitlements";
 
 const USER_SORT_FIELDS: Record<string, Prisma.UserOrderByWithRelationInput> = {
   name: { name: "asc" },
@@ -34,15 +35,17 @@ const bulkDeleteSchema = z.object({ ids: z.array(z.string().uuid()).min(1) });
 export async function listUsers(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
+  const organizationId = req.user!.organizationId;
 
   const [users, total] = await Promise.all([
     prisma.user.findMany({
+      where: organizationId ? { organizationId } : undefined,
       select: { id: true, name: true, email: true, phone: true, role: true, isActive: true, createdAt: true },
       orderBy: parseSortOrder(req, USER_SORT_FIELDS, { createdAt: "desc" }),
       skip: (page - 1) * pageSize,
       take: pageSize,
     }),
-    prisma.user.count(),
+    prisma.user.count({ where: organizationId ? { organizationId } : undefined }),
   ]);
 
   res.json({ items: users, total, page, pageSize });
@@ -51,14 +54,24 @@ export async function listUsers(req: Request, res: Response) {
 export async function createUser(req: Request, res: Response) {
   const data = createUserSchema.parse(req.body);
 
+  if (data.role === Role.SUPER_ADMIN && req.user!.role !== Role.SUPER_ADMIN) {
+    throw new AppError("Only a SUPER_ADMIN can create another SUPER_ADMIN", 403);
+  }
+
   const existing = await prisma.user.findUnique({ where: { email: data.email } });
   if (existing) {
     throw new AppError("Email already in use", 409);
   }
 
+  const organizationId = data.role === Role.SUPER_ADMIN ? null : req.user!.organizationId;
+
+  if (organizationId) {
+    await assertUnderLimit(organizationId, "maxUsers", await prisma.user.count({ where: { organizationId } }));
+  }
+
   const passwordHash = await bcrypt.hash(data.password, 10);
   const user = await prisma.user.create({
-    data: { name: data.name, email: data.email, phone: data.phone, passwordHash, role: data.role },
+    data: { name: data.name, email: data.email, phone: data.phone, passwordHash, role: data.role, organizationId },
   });
 
   await logAudit(prisma, {

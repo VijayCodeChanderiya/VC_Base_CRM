@@ -7,6 +7,7 @@ import { logAudit } from "@/utils/audit";
 import { resolveBranchId } from "@/utils/branch";
 import { imeiSchema } from "@/utils/validators";
 import { parseSortOrder } from "@/utils/sort";
+import { resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 
 const IMEI_SORT_FIELDS: Record<string, Prisma.ImeiRecordOrderByWithRelationInput> = {
   imei: { imei: "asc" },
@@ -32,8 +33,10 @@ export async function listImeis(req: Request, res: Response) {
   const status = req.query.status as string | undefined;
   const branchId = req.query.branchId as string | undefined;
   const productId = req.query.productId as string | undefined;
+  const organizationId = resolveOrgFilterMode(req);
 
   const where = {
+    ...(organizationId ? { branch: { organizationId } } : {}),
     ...(search ? { imei: { contains: search, mode: "insensitive" as const } } : {}),
     ...(status ? { status: status as never } : {}),
     ...(branchId ? { branchId } : {}),
@@ -45,7 +48,7 @@ export async function listImeis(req: Request, res: Response) {
       where,
       include: {
         product: true,
-        branch: true,
+        branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
         supplier: true,
         purchaseItem: { include: { purchase: { include: { supplier: true } } } },
         saleItem: { include: { sale: { include: { customer: true } } } },
@@ -62,11 +65,12 @@ export async function listImeis(req: Request, res: Response) {
 
 export async function searchImei(req: Request, res: Response) {
   const imei = req.params.imei;
-  const record = await prisma.imeiRecord.findUnique({
-    where: { imei },
+  const organizationId = resolveOrgFilterMode(req);
+  const record = await prisma.imeiRecord.findFirst({
+    where: { imei, ...(organizationId ? { branch: { organizationId } } : {}) },
     include: {
       product: true,
-      branch: true,
+      branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
       saleItem: { include: { sale: { include: { customer: true } } } },
       warrantyClaims: true,
     },
@@ -86,11 +90,12 @@ interface TimelineEvent {
 
 export async function getImeiTimeline(req: Request, res: Response) {
   const imei = req.params.imei;
-  const record = await prisma.imeiRecord.findUnique({
-    where: { imei },
+  const organizationId = resolveOrgFilterMode(req);
+  const record = await prisma.imeiRecord.findFirst({
+    where: { imei, ...(organizationId ? { branch: { organizationId } } : {}) },
     include: {
       product: true,
-      branch: true,
+      branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
       supplier: true,
       purchaseItem: { include: { purchase: { include: { supplier: true } } } },
       saleItem: {
@@ -232,6 +237,10 @@ const imeiUpdateSchema = z.object({
 
 export async function updateImei(req: Request, res: Response) {
   const data = imeiUpdateSchema.parse(req.body);
+  const existing = await prisma.imeiRecord.findFirst({
+    where: { id: req.params.id, branch: { organizationId: req.user!.organizationId! } },
+  });
+  if (!existing) throw new AppError("IMEI not found", 404);
   const record = await prisma.imeiRecord.update({
     where: { id: req.params.id },
     data: { imei: data.imei },
@@ -241,9 +250,11 @@ export async function updateImei(req: Request, res: Response) {
 
 export async function createImei(req: Request, res: Response) {
   const data = imeiCreateSchema.parse(req.body);
-  const branchId = await resolveBranchId(data.branchId);
+  const organizationId = req.user!.organizationId!;
+  const branchId = await resolveBranchId(organizationId, data.branchId);
 
-  const product = await prisma.product.findUniqueOrThrow({ where: { id: data.productId } });
+  const product = await prisma.product.findFirst({ where: { id: data.productId, organizationId } });
+  if (!product) throw new AppError("Product not found", 404);
   if (!product.hasImei) {
     throw new AppError("Product is not IMEI/serial tracked", 422);
   }
@@ -322,11 +333,12 @@ export async function createImei(req: Request, res: Response) {
   res.status(201).json({ created, failed });
 }
 
-export async function deleteImeiCore(id: string, userId?: string | null) {
-  const record = await prisma.imeiRecord.findUniqueOrThrow({
-    where: { id },
+export async function deleteImeiCore(id: string, userId?: string | null, organizationId?: string) {
+  const record = await prisma.imeiRecord.findFirst({
+    where: { id, ...(organizationId ? { branch: { organizationId } } : {}) },
     include: { warrantyClaims: true, sim: true, installations: true, rmas: true },
   });
+  if (!record) throw new AppError("IMEI not found", 404);
 
   if (record.status !== "IN_STOCK") {
     throw new AppError("Cannot delete IMEI: it is not currently in stock (already sold/RMA/etc)", 409);
@@ -352,7 +364,7 @@ export async function deleteImeiCore(id: string, userId?: string | null) {
 }
 
 export async function deleteImei(req: Request, res: Response) {
-  await deleteImeiCore(req.params.id, req.user!.sub);
+  await deleteImeiCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
@@ -363,13 +375,14 @@ const bulkDeleteSchema = z.object({
 export async function bulkDeleteImeis(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
   const userId = req.user!.sub;
+  const organizationId = req.user!.organizationId!;
 
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deleteImeiCore(id, userId);
+      await deleteImeiCore(id, userId, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof AppError ? err.message : "Failed to delete IMEI" });

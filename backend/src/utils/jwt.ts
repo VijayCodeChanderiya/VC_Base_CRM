@@ -9,6 +9,7 @@ export interface JwtPayload {
   sub: string;
   role: Role;
   email: string;
+  organizationId: string | null;
   type: "staff";
 }
 

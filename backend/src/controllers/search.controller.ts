@@ -3,13 +3,15 @@ import { prisma } from "@/config/prisma";
 
 export async function globalSearch(req: Request, res: Response) {
   const q = ((req.query.q as string) ?? "").trim();
-  if (q.length < 2) {
+  const organizationId = req.user!.organizationId;
+  if (q.length < 2 || !organizationId) {
     return res.json({ customers: [], products: [], imei: [], sales: [] });
   }
 
   const [customers, products, imei, sales] = await Promise.all([
     prisma.customer.findMany({
       where: {
+        organizationId,
         OR: [
           { name: { contains: q, mode: "insensitive" } },
           { phone: { contains: q, mode: "insensitive" } },
@@ -20,6 +22,7 @@ export async function globalSearch(req: Request, res: Response) {
     }),
     prisma.product.findMany({
       where: {
+        organizationId,
         OR: [
           { name: { contains: q, mode: "insensitive" } },
           { sku: { contains: q, mode: "insensitive" } },
@@ -28,12 +31,12 @@ export async function globalSearch(req: Request, res: Response) {
       take: 5,
     }),
     prisma.imeiRecord.findMany({
-      where: { imei: { contains: q, mode: "insensitive" } },
+      where: { imei: { contains: q, mode: "insensitive" }, branch: { organizationId } },
       include: { product: true },
       take: 5,
     }),
     prisma.sale.findMany({
-      where: { invoiceNumber: { contains: q, mode: "insensitive" } },
+      where: { invoiceNumber: { contains: q, mode: "insensitive" }, branch: { organizationId } },
       include: { customer: true },
       take: 5,
     }),

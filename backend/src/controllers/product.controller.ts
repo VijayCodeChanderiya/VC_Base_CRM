@@ -6,6 +6,7 @@ import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { resolveBranchId } from "@/utils/branch";
 import { parseSortOrder } from "@/utils/sort";
+import { resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 
 const PRODUCT_SORT_FIELDS: Record<string, Prisma.ProductOrderByWithRelationInput> = {
   sku: { sku: "asc" },
@@ -39,8 +40,10 @@ export async function listProducts(req: Request, res: Response) {
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
   const search = (req.query.search as string) ?? "";
   const branchId = req.query.branchId as string | undefined;
+  const organizationId = resolveOrgFilterMode(req);
 
   const where = {
+    ...(organizationId ? { organizationId } : {}),
     isActive: true,
     ...(search
       ? {
@@ -57,6 +60,7 @@ export async function listProducts(req: Request, res: Response) {
     prisma.product.findMany({
       where,
       include: {
+        organization: { select: ORG_SUMMARY_SELECT },
         category: true,
         supplier: true,
         inventory: branchId ? { where: { branchId }, include: { branch: true } } : { include: { branch: true } },
@@ -72,16 +76,24 @@ export async function listProducts(req: Request, res: Response) {
 }
 
 export async function getProduct(req: Request, res: Response) {
-  const product = await prisma.product.findUniqueOrThrow({
-    where: { id: req.params.id },
-    include: { category: true, supplier: true, inventory: { include: { branch: true } } },
+  const organizationId = resolveOrgFilterMode(req);
+  const product = await prisma.product.findFirst({
+    where: { id: req.params.id, ...(organizationId ? { organizationId } : {}) },
+    include: {
+      organization: { select: ORG_SUMMARY_SELECT },
+      category: true,
+      supplier: true,
+      inventory: { include: { branch: true } },
+    },
   });
+  if (!product) throw new AppError("Product not found", 404);
   res.json(product);
 }
 
 export async function createProduct(req: Request, res: Response) {
   const data = productSchema.parse(req.body);
-  const branchId = await resolveBranchId(data.branchId);
+  const organizationId = req.user!.organizationId!;
+  const branchId = await resolveBranchId(organizationId, data.branchId);
 
   const product = await prisma.product.create({
     data: {
@@ -98,6 +110,7 @@ export async function createProduct(req: Request, res: Response) {
       reorderLevel: data.reorderLevel,
       categoryId: data.categoryId,
       supplierId: data.supplierId,
+      organizationId,
       inventory: data.hasImei ? undefined : { create: { quantity: 0, branchId } },
     },
     include: { inventory: true },
@@ -116,6 +129,11 @@ export async function createProduct(req: Request, res: Response) {
 
 export async function updateProduct(req: Request, res: Response) {
   const data = productSchema.partial().omit({ branchId: true }).parse(req.body);
+  const existing = await prisma.product.findFirst({
+    where: { id: req.params.id, organizationId: req.user!.organizationId! },
+  });
+  if (!existing) throw new AppError("Product not found", 404);
+
   const product = await prisma.product.update({
     where: { id: req.params.id },
     data,
@@ -123,7 +141,10 @@ export async function updateProduct(req: Request, res: Response) {
   res.json(product);
 }
 
-async function deleteProductCore(id: string, userId: string): Promise<void> {
+async function deleteProductCore(id: string, userId: string, organizationId: string): Promise<void> {
+  const existing = await prisma.product.findFirst({ where: { id, organizationId } });
+  if (!existing) throw new AppError("Product not found", 404);
+
   const soldImeiCount = await prisma.imeiRecord.count({
     where: { productId: id, status: "SOLD" },
   });
@@ -146,18 +167,19 @@ async function deleteProductCore(id: string, userId: string): Promise<void> {
 }
 
 export async function deleteProduct(req: Request, res: Response) {
-  await deleteProductCore(req.params.id, req.user!.sub);
+  await deleteProductCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
 export async function bulkDeleteProducts(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
+  const organizationId = req.user!.organizationId!;
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deleteProductCore(id, req.user!.sub);
+      await deleteProductCore(id, req.user!.sub, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof AppError ? err.message : "Failed to delete product" });

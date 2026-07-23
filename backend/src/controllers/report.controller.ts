@@ -20,8 +20,9 @@ function sendCsv(res: Response, filename: string, csv: string) {
   res.send(csv);
 }
 
-export async function salesReport(_req: Request, res: Response) {
+export async function salesReport(req: Request, res: Response) {
   const sales = await prisma.sale.findMany({
+    where: { branch: { organizationId: req.user!.organizationId! } },
     include: { customer: true, branch: true, items: { include: { product: true } } },
     orderBy: { createdAt: "desc" },
   });
@@ -58,8 +59,9 @@ export async function salesReport(_req: Request, res: Response) {
   sendCsv(res, "sales-report.csv", csv);
 }
 
-export async function purchasesReport(_req: Request, res: Response) {
+export async function purchasesReport(req: Request, res: Response) {
   const purchases = await prisma.purchase.findMany({
+    where: { branch: { organizationId: req.user!.organizationId! } },
     include: { supplier: true, branch: true, items: { include: { product: true } } },
     orderBy: { createdAt: "desc" },
   });
@@ -96,12 +98,17 @@ export async function purchasesReport(_req: Request, res: Response) {
   sendCsv(res, "purchases-report.csv", csv);
 }
 
-export async function inventoryReport(_req: Request, res: Response) {
+export async function inventoryReport(req: Request, res: Response) {
+  const organizationId = req.user!.organizationId!;
   const [products, branches, inventories, imeiCounts] = await Promise.all([
-    prisma.product.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
-    prisma.branch.findMany({ orderBy: { code: "asc" } }),
-    prisma.inventory.findMany(),
-    prisma.imeiRecord.groupBy({ by: ["productId", "branchId", "status"], _count: { _all: true } }),
+    prisma.product.findMany({ where: { organizationId }, include: { category: true }, orderBy: { name: "asc" } }),
+    prisma.branch.findMany({ where: { organizationId }, orderBy: { code: "asc" } }),
+    prisma.inventory.findMany({ where: { branch: { organizationId } } }),
+    prisma.imeiRecord.groupBy({
+      by: ["productId", "branchId", "status"],
+      where: { branch: { organizationId } },
+      _count: { _all: true },
+    }),
   ]);
 
   const quantityByProductBranch = new Map<string, number>();
@@ -153,7 +160,7 @@ function buildActivityWhere(req: Request): Prisma.AuditLogWhereInput {
   const dateFrom = req.query.dateFrom as string | undefined;
   const dateTo = req.query.dateTo as string | undefined;
 
-  const where: Prisma.AuditLogWhereInput = {};
+  const where: Prisma.AuditLogWhereInput = { organizationId: req.user!.organizationId! };
 
   if (actionFilter === "ADD") {
     where.action = { in: ADD_ACTIONS };

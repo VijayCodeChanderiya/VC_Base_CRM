@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { authenticate, authorize } from "@/middleware/auth";
+import { authenticate, authorize, requireOrgContext } from "@/middleware/auth";
 import { salesReport, purchasesReport, inventoryReport } from "@/controllers/report.controller";
 
 const router = Router();
 
-router.use(authenticate, authorize("ADMIN", "STAFF"));
+router.use(authenticate, authorize("ADMIN", "STAFF"), requireOrgContext);
 router.get("/sales.csv", salesReport);
 router.get("/purchases.csv", purchasesReport);
 router.get("/inventory.csv", inventoryReport);

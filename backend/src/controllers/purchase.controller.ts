@@ -1,11 +1,15 @@
 import { Request, Response } from "express";
 import { z } from "zod";
+import multer from "multer";
+import ExcelJS from "exceljs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/config/prisma";
 import { AppError } from "@/utils/AppError";
 import { logAudit } from "@/utils/audit";
 import { resolveBranchId } from "@/utils/branch";
+import { assertSupplierInOrg, resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 import { parseSortOrder } from "@/utils/sort";
+import { loadWorkbookSheet, mapRowByHeader, cellToString } from "@/utils/bulkUpload";
 
 const PURCHASE_SORT_FIELDS: Record<string, Prisma.PurchaseOrderByWithRelationInput> = {
   purchaseNumber: { purchaseNumber: "asc" },
@@ -41,13 +45,21 @@ export async function listPurchases(req: Request, res: Response) {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
   const branchId = req.query.branchId as string | undefined;
+  const organizationId = resolveOrgFilterMode(req);
 
-  const where = branchId ? { branchId } : {};
+  const where = {
+    ...(organizationId ? { branch: { organizationId } } : {}),
+    ...(branchId ? { branchId } : {}),
+  };
 
   const [items, total] = await Promise.all([
     prisma.purchase.findMany({
       where,
-      include: { supplier: true, branch: true, items: true },
+      include: {
+        supplier: true,
+        branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
+        items: true,
+      },
       skip: (page - 1) * pageSize,
       take: pageSize,
       orderBy: parseSortOrder(req, PURCHASE_SORT_FIELDS, { createdAt: "desc" }),
@@ -59,11 +71,12 @@ export async function listPurchases(req: Request, res: Response) {
 }
 
 export async function getPurchase(req: Request, res: Response) {
-  const purchase = await prisma.purchase.findUniqueOrThrow({
-    where: { id: req.params.id },
+  const organizationId = resolveOrgFilterMode(req);
+  const purchase = await prisma.purchase.findFirst({
+    where: { id: req.params.id, ...(organizationId ? { branch: { organizationId } } : {}) },
     include: {
       supplier: true,
-      branch: true,
+      branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
       user: { select: { id: true, name: true, email: true } },
       items: {
         include: {
@@ -78,13 +91,17 @@ export async function getPurchase(req: Request, res: Response) {
       payments: true,
     },
   });
+  if (!purchase) throw new AppError("Purchase not found", 404);
   res.json(purchase);
 }
 
-export async function createPurchase(req: Request, res: Response) {
-  const data = purchaseSchema.parse(req.body);
-  const userId = req.user!.sub;
-  const branchId = await resolveBranchId(data.branchId);
+async function createPurchaseCore(
+  data: z.infer<typeof purchaseSchema>,
+  userId: string,
+  organizationId: string
+) {
+  const branchId = await resolveBranchId(organizationId, data.branchId);
+  await assertSupplierInOrg(data.supplierId, organizationId);
 
   let purchaseDate: Date | undefined;
   if (data.purchaseDate) {
@@ -99,7 +116,7 @@ export async function createPurchase(req: Request, res: Response) {
   }
 
   const productIds = [...new Set(data.items.map((i) => i.productId))];
-  const products = await prisma.product.findMany({ where: { id: { in: productIds } } });
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, organizationId } });
   const productMap = new Map(products.map((p) => [p.id, p]));
 
   for (const item of data.items) {
@@ -183,14 +200,23 @@ export async function createPurchase(req: Request, res: Response) {
     include: { items: { include: { product: true, imeiRecords: true } }, supplier: true, branch: true },
   });
 
+  return full;
+}
+
+export async function createPurchase(req: Request, res: Response) {
+  const data = purchaseSchema.parse(req.body);
+  const userId = req.user!.sub;
+  const organizationId = req.user!.organizationId!;
+  const full = await createPurchaseCore(data, userId, organizationId);
   res.status(201).json(full);
 }
 
-export async function deletePurchaseCore(id: string, userId?: string | null) {
-  const purchase = await prisma.purchase.findUniqueOrThrow({
-    where: { id },
+export async function deletePurchaseCore(id: string, userId?: string | null, organizationId?: string) {
+  const purchase = await prisma.purchase.findFirst({
+    where: { id, ...(organizationId ? { branch: { organizationId } } : {}) },
     include: { items: { include: { imeiRecords: true, product: true } } },
   });
+  if (!purchase) throw new AppError("Purchase not found", 404);
 
   const nonInStock = purchase.items.some((item) =>
     item.imeiRecords.some((rec) => rec.status !== "IN_STOCK")
@@ -259,7 +285,7 @@ export async function deletePurchaseCore(id: string, userId?: string | null) {
 }
 
 export async function deletePurchase(req: Request, res: Response) {
-  await deletePurchaseCore(req.params.id, req.user!.sub);
+  await deletePurchaseCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
@@ -270,13 +296,14 @@ const bulkDeleteSchema = z.object({
 export async function bulkDeletePurchases(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
   const userId = req.user!.sub;
+  const organizationId = req.user!.organizationId!;
 
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deletePurchaseCore(id, userId);
+      await deletePurchaseCore(id, userId, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof AppError ? err.message : "Failed to delete purchase" });
@@ -284,4 +311,200 @@ export async function bulkDeletePurchases(req: Request, res: Response) {
   }
 
   res.json({ deleted, failed });
+}
+
+// ---------------------------------------------------------------------------
+// Bulk upload — same convention as Sales: each row is one line item tagged
+// with a shared "PO Ref"; rows sharing the same ref group into one Purchase.
+// Reuses createPurchaseCore (same stock/inventory logic as the single-record
+// create form) per group.
+// ---------------------------------------------------------------------------
+
+export const purchaseUploadMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+}).single("file");
+
+const PURCHASE_TEMPLATE_COLUMNS: { header: string; key: string; match: (h: string) => boolean }[] = [
+  { header: "PO Ref", key: "reference", match: (h) => h.includes("poref") || h === "reference" || h === "ref" },
+  { header: "Supplier Phone", key: "supplierPhone", match: (h) => h.includes("supplierphone") || h === "phone" },
+  { header: "Invoice Number", key: "invoiceNumber", match: (h) => h.includes("invoicenumber") },
+  { header: "Purchase Date (YYYY-MM-DD)", key: "purchaseDate", match: (h) => h.includes("purchasedate") },
+  { header: "Product SKU", key: "productSku", match: (h) => h.includes("productsku") || h === "sku" },
+  { header: "Quantity", key: "quantity", match: (h) => h === "quantity" || h === "qty" },
+  { header: "Unit Cost", key: "unitCost", match: (h) => h.includes("unitcost") },
+  { header: "Tax Percent", key: "taxPercent", match: (h) => h.includes("taxpercent") },
+];
+
+const PURCHASE_SAMPLE_ROWS = [
+  {
+    reference: "PO-SAMPLE-1",
+    supplierPhone: "9876543210",
+    invoiceNumber: "SUP-INV-001",
+    purchaseDate: "",
+    productSku: "SKU-001",
+    quantity: "10",
+    unitCost: "900",
+    taxPercent: "18",
+  },
+  {
+    reference: "PO-SAMPLE-1",
+    supplierPhone: "9876543210",
+    invoiceNumber: "",
+    purchaseDate: "",
+    productSku: "SKU-002",
+    quantity: "5",
+    unitCost: "300",
+    taxPercent: "18",
+  },
+];
+
+async function buildPurchaseTemplateWorkbook(withSample: boolean) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("Purchases");
+  sheet.columns = PURCHASE_TEMPLATE_COLUMNS.map((c) => ({ header: c.header, key: c.key, width: 22 }));
+  sheet.getRow(1).font = { bold: true };
+  if (withSample) {
+    for (const row of PURCHASE_SAMPLE_ROWS) sheet.addRow(row);
+    sheet.addRow({});
+    sheet.addRow({
+      reference:
+        "Rows sharing the same PO Ref become one purchase with multiple items. Delete the example rows above before uploading your own data.",
+    });
+  }
+  return workbook;
+}
+
+export async function downloadPurchaseBulkTemplate(req: Request, res: Response) {
+  const withSample = req.query.sample === "1";
+  const workbook = await buildPurchaseTemplateWorkbook(withSample);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${withSample ? "Purchases sample file" : "Purchases bulk upload template"}.xlsx"`
+  );
+  await workbook.xlsx.write(res);
+  res.end();
+}
+
+interface PurchaseBulkRow {
+  rowNumber: number;
+  reference: string;
+  supplierPhone: string;
+  invoiceNumber?: string;
+  purchaseDate?: string;
+  productSku: string;
+  quantity?: string;
+  unitCost?: string;
+  taxPercent?: string;
+}
+
+export async function bulkUploadPurchasesFromExcel(req: Request, res: Response) {
+  if (!req.file) {
+    throw new AppError("No file uploaded", 422);
+  }
+  const organizationId = req.user!.organizationId!;
+  const userId = req.user!.sub;
+  const sheet = await loadWorkbookSheet(req.file.buffer);
+
+  const headerRow = sheet.getRow(1);
+  const columnIndex = mapRowByHeader(headerRow, PURCHASE_TEMPLATE_COLUMNS);
+
+  if (!columnIndex.reference || !columnIndex.supplierPhone || !columnIndex.productSku) {
+    throw new AppError(
+      'Could not find "PO Ref", "Supplier Phone" and "Product SKU" columns in the uploaded file',
+      422
+    );
+  }
+
+  const get = (row: ExcelJS.Row, key: string) => (columnIndex[key] ? cellToString(row.getCell(columnIndex[key]).value) : "");
+
+  const rawRows: PurchaseBulkRow[] = [];
+  for (const row of sheet.getRows(2, Math.max(0, sheet.rowCount - 1)) ?? []) {
+    const reference = get(row, "reference");
+    const productSku = get(row, "productSku");
+    if (!reference && !productSku) continue;
+    rawRows.push({
+      rowNumber: row.number,
+      reference,
+      supplierPhone: get(row, "supplierPhone"),
+      invoiceNumber: get(row, "invoiceNumber") || undefined,
+      purchaseDate: get(row, "purchaseDate") || undefined,
+      productSku,
+      quantity: get(row, "quantity") || undefined,
+      unitCost: get(row, "unitCost") || undefined,
+      taxPercent: get(row, "taxPercent") || undefined,
+    });
+  }
+
+  if (rawRows.length === 0) {
+    throw new AppError("No purchase rows found in the uploaded file", 422);
+  }
+
+  const groups = new Map<string, PurchaseBulkRow[]>();
+  for (const r of rawRows) {
+    const key = r.reference || `__row_${r.rowNumber}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+
+  const phones = [...new Set(rawRows.map((r) => r.supplierPhone).filter(Boolean))];
+  const skus = [...new Set(rawRows.map((r) => r.productSku).filter(Boolean))];
+  const [suppliers, products] = await Promise.all([
+    prisma.supplier.findMany({ where: { organizationId, phone: { in: phones } } }),
+    prisma.product.findMany({ where: { organizationId, sku: { in: skus } } }),
+  ]);
+  const supplierByPhone = new Map(suppliers.map((s) => [s.phone, s]));
+  const productBySku = new Map(products.map((p) => [p.sku, p]));
+
+  const created: string[] = [];
+  const failed: { reference: string; rows: number[]; reason: string }[] = [];
+
+  for (const [key, rows] of groups) {
+    const rowNumbers = rows.map((r) => r.rowNumber);
+    const label = key.startsWith("__row_") ? `(row ${rowNumbers[0]}, no PO Ref)` : key;
+    try {
+      const first = rows[0];
+      const supplier = supplierByPhone.get(first.supplierPhone);
+      if (!supplier) {
+        throw new AppError(`Supplier with phone "${first.supplierPhone}" not found in your organization`, 404);
+      }
+
+      const items = rows.map((r) => {
+        const product = productBySku.get(r.productSku);
+        if (!product) {
+          throw new AppError(`Product with SKU "${r.productSku}" not found in your organization`, 404);
+        }
+        return {
+          productId: product.id,
+          quantity: r.quantity ? Number(r.quantity) : 1,
+          unitCost: r.unitCost ? Number(r.unitCost) : Number(product.costPrice),
+          taxPercent: r.taxPercent ? Number(r.taxPercent) : Number(product.taxPercent),
+        };
+      });
+
+      const data = purchaseSchema.parse({
+        supplierId: supplier.id,
+        invoiceNumber: first.invoiceNumber,
+        purchaseDate: first.purchaseDate,
+        items,
+      });
+
+      const purchase = await createPurchaseCore(data, userId, organizationId);
+      created.push(purchase.purchaseNumber);
+    } catch (err) {
+      failed.push({
+        reference: label,
+        rows: rowNumbers,
+        reason:
+          err instanceof z.ZodError
+            ? err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
+            : err instanceof AppError
+              ? err.message
+              : "Failed to create purchase",
+      });
+    }
+  }
+
+  res.status(201).json({ totalRecords: groups.size, created, failed });
 }

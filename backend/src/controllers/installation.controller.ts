@@ -2,9 +2,11 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/config/prisma";
+import { AppError } from "@/utils/AppError";
 import { resolveBranchId } from "@/utils/branch";
 import { logAudit } from "@/utils/audit";
 import { parseSortOrder } from "@/utils/sort";
+import { resolveOrgFilterMode, ORG_SUMMARY_SELECT } from "@/utils/tenant";
 
 const INSTALLATION_SORT_FIELDS: Record<string, Prisma.InstallationRecordOrderByWithRelationInput> = {
   vehicle: { vehicle: { registrationNumber: "asc" } },
@@ -35,8 +37,10 @@ export async function listInstallations(req: Request, res: Response) {
   const pageSize = Math.min(1000, Number(req.query.pageSize) || 20);
   const status = req.query.status as string | undefined;
   const branchId = req.query.branchId as string | undefined;
+  const organizationId = resolveOrgFilterMode(req);
 
   const where = {
+    ...(organizationId ? { branch: { organizationId } } : {}),
     ...(status ? { status: status as never } : {}),
     ...(branchId ? { branchId } : {}),
   };
@@ -49,6 +53,7 @@ export async function listInstallations(req: Request, res: Response) {
         imeiRecord: { include: { product: true } },
         sim: true,
         installer: { select: { id: true, name: true } },
+        branch: { include: { organization: { select: ORG_SUMMARY_SELECT } } },
       },
       skip: (page - 1) * pageSize,
       take: pageSize,
@@ -62,7 +67,7 @@ export async function listInstallations(req: Request, res: Response) {
 
 export async function createInstallation(req: Request, res: Response) {
   const data = installationSchema.parse(req.body);
-  const branchId = await resolveBranchId(data.branchId);
+  const branchId = await resolveBranchId(req.user!.organizationId!, data.branchId);
   const userId = req.user!.sub;
 
   const installation = await prisma.installationRecord.create({
@@ -119,8 +124,11 @@ export async function updateInstallationStatus(req: Request, res: Response) {
   res.json(installation);
 }
 
-export async function deleteInstallationCore(id: string, userId?: string | null) {
-  const installation = await prisma.installationRecord.findUniqueOrThrow({ where: { id } });
+export async function deleteInstallationCore(id: string, userId?: string | null, organizationId?: string) {
+  const installation = await prisma.installationRecord.findFirst({
+    where: { id, ...(organizationId ? { branch: { organizationId } } : {}) },
+  });
+  if (!installation) throw new AppError("Installation not found", 404);
 
   await prisma.installationRecord.delete({ where: { id } });
 
@@ -134,7 +142,7 @@ export async function deleteInstallationCore(id: string, userId?: string | null)
 }
 
 export async function deleteInstallation(req: Request, res: Response) {
-  await deleteInstallationCore(req.params.id, req.user!.sub);
+  await deleteInstallationCore(req.params.id, req.user!.sub, req.user!.organizationId!);
   res.status(204).send();
 }
 
@@ -145,13 +153,14 @@ const bulkDeleteSchema = z.object({
 export async function bulkDeleteInstallations(req: Request, res: Response) {
   const { ids } = bulkDeleteSchema.parse(req.body);
   const userId = req.user!.sub;
+  const organizationId = req.user!.organizationId!;
 
   const deleted: string[] = [];
   const failed: { id: string; reason: string }[] = [];
 
   for (const id of ids) {
     try {
-      await deleteInstallationCore(id, userId);
+      await deleteInstallationCore(id, userId, organizationId);
       deleted.push(id);
     } catch (err) {
       failed.push({ id, reason: err instanceof Error ? err.message : "Unknown error" });

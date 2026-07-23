@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { prisma } from "@/config/prisma";
+import { AppError } from "@/utils/AppError";
 
 function startOfDay(d: Date) {
   const x = new Date(d);
@@ -13,9 +14,42 @@ function daysAgo(n: number) {
   return startOfDay(d);
 }
 
+// Every model with a branchId column is scoped to the caller's organization via this:
+// resolves to `{ branchId: <id> }` when a caller-supplied branchId is given (validated
+// to actually belong to the org), else `{ branchId: { in: <all of the org's branches> } }`.
+async function resolveOrgBranchWhere(organizationId: string, requestedBranchId?: string) {
+  if (requestedBranchId) {
+    const branch = await prisma.branch.findFirst({ where: { id: requestedBranchId, organizationId } });
+    if (!branch) throw new AppError("Branch not found in your organization", 403);
+    return { branchId: requestedBranchId };
+  }
+  const branches = await prisma.branch.findMany({ where: { organizationId }, select: { id: true } });
+  return { branchId: { in: branches.map((b) => b.id) } };
+}
+
 export async function getDashboardStats(req: Request, res: Response) {
-  const branchId = req.query.branchId as string | undefined;
-  const branchWhere = branchId ? { branchId } : {};
+  const organizationId = req.user!.organizationId;
+  if (!organizationId) {
+    // SUPER_ADMIN is platform-level, not tied to a tenant's operational data.
+    return res.json({
+      salesThisMonth: 0,
+      revenueThisMonth: 0,
+      totalCustomers: 0,
+      totalProducts: 0,
+      lowStockCount: 0,
+      imeiInStock: 0,
+      imeiSold: 0,
+      pendingReturns: 0,
+      activeWarrantyClaims: 0,
+      pendingRma: 0,
+      activeSims: 0,
+      totalVehicles: 0,
+      salesTrend: [],
+      purchaseTrend: [],
+      topProducts: [],
+    });
+  }
+  const branchWhere = await resolveOrgBranchWhere(organizationId, req.query.branchId as string | undefined);
 
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
@@ -44,14 +78,14 @@ export async function getDashboardStats(req: Request, res: Response) {
       where: { ...branchWhere, createdAt: { gte: startOfMonth } },
       _sum: { grandTotal: true },
     }),
-    prisma.customer.count(),
-    prisma.product.count({ where: { isActive: true } }),
+    prisma.customer.count({ where: { organizationId } }),
+    prisma.product.count({ where: { organizationId, isActive: true } }),
     prisma.inventory.findMany({ where: branchWhere, include: { product: true } }),
     prisma.imeiRecord.count({ where: { ...branchWhere, status: "IN_STOCK" } }),
     prisma.imeiRecord.count({ where: { ...branchWhere, status: "SOLD" } }),
-    prisma.return.count({ where: { status: "PENDING" } }),
-    prisma.warrantyClaim.count({ where: { status: "ACTIVE" } }),
-    prisma.rma.count({ where: { status: { in: ["REQUESTED", "SHIPPED_TO_SUPPLIER", "RECEIVED_BY_SUPPLIER"] } } }),
+    prisma.return.count({ where: { status: "PENDING", customer: { organizationId } } }),
+    prisma.warrantyClaim.count({ where: { status: "ACTIVE", customer: { organizationId } } }),
+    prisma.rma.count({ where: { ...branchWhere, status: { in: ["REQUESTED", "SHIPPED_TO_SUPPLIER", "RECEIVED_BY_SUPPLIER"] } } }),
     prisma.sim.count({ where: { ...branchWhere, status: "ACTIVE" } }),
     prisma.vehicle.count({ where: branchWhere }),
     prisma.sale.findMany({
@@ -60,6 +94,7 @@ export async function getDashboardStats(req: Request, res: Response) {
     }),
     prisma.saleItem.groupBy({
       by: ["productId"],
+      where: { sale: branchWhere },
       _sum: { lineTotal: true, quantity: true },
       orderBy: { _sum: { lineTotal: "desc" } },
       take: 5,
@@ -101,14 +136,16 @@ export async function getDashboardStats(req: Request, res: Response) {
   const lowStockCount = lowStockInventory.filter((i) => i.quantity <= i.product.reorderLevel).length;
 
   const topProductIds = topProductAgg.map((p) => p.productId);
-  const products = await prisma.product.findMany({ where: { id: { in: topProductIds } } });
+  const products = await prisma.product.findMany({ where: { id: { in: topProductIds }, organizationId } });
   const productNameMap = new Map(products.map((p) => [p.id, p.name]));
-  const topProducts = topProductAgg.map((p) => ({
-    productId: p.productId,
-    name: productNameMap.get(p.productId) ?? "Unknown",
-    revenue: Number(p._sum.lineTotal ?? 0),
-    quantity: p._sum.quantity ?? 0,
-  }));
+  const topProducts = topProductAgg
+    .filter((p) => productNameMap.has(p.productId))
+    .map((p) => ({
+      productId: p.productId,
+      name: productNameMap.get(p.productId) ?? "Unknown",
+      revenue: Number(p._sum.lineTotal ?? 0),
+      quantity: p._sum.quantity ?? 0,
+    }));
 
   res.json({
     salesThisMonth,
@@ -130,11 +167,14 @@ export async function getDashboardStats(req: Request, res: Response) {
 }
 
 export async function getPurchaseTrend(req: Request, res: Response) {
-  const branchId = req.query.branchId as string | undefined;
-  const branchWhere = branchId ? { branchId } : {};
+  const organizationId = req.user!.organizationId;
   const period = (req.query.period as string) === "month" || (req.query.period as string) === "year"
     ? (req.query.period as "month" | "year")
     : "day";
+  if (!organizationId) {
+    return res.json({ period, data: [] });
+  }
+  const branchWhere = await resolveOrgBranchWhere(organizationId, req.query.branchId as string | undefined);
 
   if (period === "day") {
     const start = daysAgo(13);
@@ -195,9 +235,12 @@ export async function getPurchaseTrend(req: Request, res: Response) {
 const DETAIL_ROW_CAP = 500;
 
 export async function getDashboardDetail(req: Request, res: Response) {
+  const organizationId = req.user!.organizationId;
   const type = req.query.type as string;
-  const branchId = req.query.branchId as string | undefined;
-  const branchWhere = branchId ? { branchId } : {};
+  if (!organizationId) {
+    return res.json({ type, title: "", columns: [], rows: [] });
+  }
+  const branchWhere = await resolveOrgBranchWhere(organizationId, req.query.branchId as string | undefined);
 
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
@@ -272,6 +315,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
 
     case "customers": {
       const customers = await prisma.customer.findMany({
+        where: { organizationId },
         orderBy: { createdAt: "desc" },
         take: DETAIL_ROW_CAP,
       });
@@ -285,7 +329,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
 
     case "products": {
       const products = await prisma.product.findMany({
-        where: { isActive: true },
+        where: { organizationId, isActive: true },
         orderBy: { name: "asc" },
         take: DETAIL_ROW_CAP,
       });
@@ -318,7 +362,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
     }
 
     case "imeiStock": {
-      const products = await prisma.product.findMany({ where: { hasImei: true, isActive: true } });
+      const products = await prisma.product.findMany({ where: { organizationId, hasImei: true, isActive: true } });
       const imeis = await prisma.imeiRecord.findMany({
         where: branchWhere,
         include: {
@@ -359,7 +403,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
 
     case "pendingReturns": {
       const returns = await prisma.return.findMany({
-        where: { status: "PENDING" },
+        where: { status: "PENDING", customer: { organizationId } },
         include: { customer: true, sale: true },
         orderBy: { createdAt: "desc" },
         take: DETAIL_ROW_CAP,
@@ -380,7 +424,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
 
     case "warrantyClaims": {
       const claims = await prisma.warrantyClaim.findMany({
-        where: { status: "ACTIVE" },
+        where: { status: "ACTIVE", customer: { organizationId } },
         include: { customer: true, imeiRecord: { include: { product: true } } },
         orderBy: { claimDate: "desc" },
         take: DETAIL_ROW_CAP,
@@ -401,7 +445,7 @@ export async function getDashboardDetail(req: Request, res: Response) {
 
     case "pendingRma": {
       const rmas = await prisma.rma.findMany({
-        where: { status: { in: ["REQUESTED", "SHIPPED_TO_SUPPLIER", "RECEIVED_BY_SUPPLIER"] } },
+        where: { ...branchWhere, status: { in: ["REQUESTED", "SHIPPED_TO_SUPPLIER", "RECEIVED_BY_SUPPLIER"] } },
         include: { supplier: true, imeiRecord: { include: { product: true } } },
         orderBy: { createdAt: "desc" },
         take: DETAIL_ROW_CAP,
@@ -459,21 +503,24 @@ export async function getDashboardDetail(req: Request, res: Response) {
     case "topProducts": {
       const agg = await prisma.saleItem.groupBy({
         by: ["productId"],
+        where: { sale: branchWhere },
         _sum: { lineTotal: true, quantity: true },
         orderBy: { _sum: { lineTotal: "desc" } },
         take: 20,
       });
-      const products = await prisma.product.findMany({ where: { id: { in: agg.map((a) => a.productId) } } });
+      const products = await prisma.product.findMany({ where: { id: { in: agg.map((a) => a.productId) }, organizationId } });
       const nameMap = new Map(products.map((p) => [p.id, p.name]));
       return res.json({
         type,
         title: "Top products by revenue",
         columns: ["Product", "Quantity sold", "Revenue"],
-        rows: agg.map((a) => [
-          nameMap.get(a.productId) ?? "Unknown",
-          String(a._sum.quantity ?? 0),
-          Number(a._sum.lineTotal ?? 0).toLocaleString(),
-        ]),
+        rows: agg
+          .filter((a) => nameMap.has(a.productId))
+          .map((a) => [
+            nameMap.get(a.productId) ?? "Unknown",
+            String(a._sum.quantity ?? 0),
+            Number(a._sum.lineTotal ?? 0).toLocaleString(),
+          ]),
       });
     }
 

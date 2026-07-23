@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticate, authorize } from "@/middleware/auth";
+import { authenticate, authorize, requireOrgContext } from "@/middleware/auth";
 import {
   listCustomers,
   getCustomer,
@@ -11,7 +11,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate);
+router.use(authenticate, requireOrgContext);
 router.get("/", listCustomers);
 router.get("/:id", getCustomer);
 router.post("/", authorize("ADMIN", "STAFF"), createCustomer);

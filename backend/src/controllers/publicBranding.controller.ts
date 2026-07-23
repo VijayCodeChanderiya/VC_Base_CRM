@@ -4,24 +4,39 @@ import { Request, Response } from "express";
 import { prisma } from "@/config/prisma";
 import { UPLOADS_DIR } from "@/config/storage";
 import { AppError } from "@/utils/AppError";
+import { getDefaultOrganizationId } from "@/utils/org";
+import { getOrganizationLogoFile } from "@/utils/orgBranding";
 
-export const BRANDING_LOGO_ENTITY = { entityType: "Branding", entityId: "logo" } as const;
-
+// The Customer Portal (and its exports) has no per-customer organization
+// concept yet (deferred multi-tenant hardening item — see project memory),
+// so it always resolves to the single grandfathered default Organization.
 export async function getBrandingLogoFile() {
-  return prisma.file.findFirst({
-    where: BRANDING_LOGO_ENTITY,
-    orderBy: { createdAt: "desc" },
+  const organizationId = await getDefaultOrganizationId();
+  return getOrganizationLogoFile(organizationId);
+}
+
+// Shared by every customer-portal PDF export that needs a branded header.
+export async function getBrandingHeaderInfo() {
+  const organizationId = await getDefaultOrganizationId();
+  const org = await prisma.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { name: true, displayName: true },
   });
+  const logo = await getOrganizationLogoFile(organizationId);
+  return { companyName: org.displayName || org.name || "Alphatech CRM", logo };
 }
 
 export async function getBranding(_req: Request, res: Response) {
-  const setting = await prisma.setting.findUnique({ where: { key: "companyProfile" } });
-  const profile = (setting?.value as Record<string, unknown>) ?? {};
-  const logo = await getBrandingLogoFile();
+  const organizationId = await getDefaultOrganizationId();
+  const org = await prisma.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { name: true, displayName: true, mobileNumber: true },
+  });
+  const logo = await getOrganizationLogoFile(organizationId);
 
   res.json({
-    companyName: (profile.companyName as string) || "Alphatech CRM",
-    phone: (profile.phone as string) || null,
+    companyName: org.displayName || org.name || "Alphatech CRM",
+    phone: org.mobileNumber || null,
     hasLogo: !!logo,
   });
 }
@@ -35,6 +50,6 @@ export async function getBrandingLogo(_req: Request, res: Response) {
   if (!fs.existsSync(fullPath)) {
     throw new AppError("Logo file missing from storage", 404);
   }
-  res.setHeader("Cache-Control", "public, max-age=300");
+  res.setHeader("Cache-Control", "no-store");
   res.sendFile(fullPath);
 }
